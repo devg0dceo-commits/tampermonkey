@@ -6,38 +6,6 @@
   // ─── Helpers ──────────────────────────────────────────────────────────────
   const getSetting = (key) => localStorage.getItem(key) !== 'false';
 
-  // ─── ProfileView ──────────────────────────────────────────────────────────
-  const API_BASE_URL = 'https://api-devg0d.vercel.app';
-
-  function fbViewHDPhoto() {
-    const currentURL = window.location.href;
-    if (!currentURL.includes('facebook.com/')) return;
-
-    // Show loading state on the menu item
-    const nameEl = document.querySelector('#dg-menu .dg-item[data-plugin-index="0"] .dg-item-name');
-    const originalText = nameEl?.textContent;
-    if (nameEl) { nameEl.textContent = '⏳ Loading...'; }
-
-    GM_xmlhttpRequest({
-      method: 'GET',
-      url: `${API_BASE_URL}/api/fb-uid?url=${encodeURIComponent(currentURL)}`,
-      onload: (response) => {
-        if (nameEl) nameEl.textContent = originalText;
-        try {
-          const data = JSON.parse(response.responseText);
-          if (data.uid) {
-            const photoURL = `https://graph.facebook.com/${data.uid}/picture?width=5000&access_token=6628568379%7Cc1e620fa708a1d5696fb991c1bde5662`;
-            window.open(photoURL, '_blank');
-          }
-        } catch (e) { console.error('[DEV/g0d] ProfileView error:', e); }
-      },
-      onerror: (e) => {
-        if (nameEl) nameEl.textContent = originalText;
-        console.error('[DEV/g0d] ProfileView API error:', e);
-      },
-    });
-  }
-
   // ─── VideoDownloader ──────────────────────────────────────────────────────
   function initFbVideoDownloader() {
     function getVideoIdFromVideoElement(video) {
@@ -350,12 +318,6 @@
 
   // ─── Register Plugins ─────────────────────────────────────────────────────
   window.DEVg0d_PLUGINS = [
-    {
-      name: '📸 ProfileView',
-      desc: 'View high-resolution profile photo',
-      type: 'click',
-      fn: fbViewHDPhoto,
-    },
     {
       name: '🎬 VideoDownloader',
       desc: 'Download Facebook videos in HD',
