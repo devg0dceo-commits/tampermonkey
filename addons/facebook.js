@@ -1,5 +1,4 @@
 // DEV/g0d - Facebook Addon
-// Register plugins via window.DEVg0d_PLUGINS for the main script to render
 
 (function () {
 
@@ -319,15 +318,13 @@
   // ─── Register Plugins ─────────────────────────────────────────────────────
   window.DEVg0d_PLUGINS = [
     {
-      name: '🎬 VideoDownloader',
-      desc: 'Download Facebook videos in HD',
+      name: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px"><path d="M15 10l4.553-2.069A1 1 0 0 1 21 8.82v6.36a1 1 0 0 1-1.447.89L15 14M3 8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>VideoDownloader',
       type: 'toggle',
       key: 'devg0d-fb-video',
       init: initFbVideoDownloader,
     },
     {
-      name: '📖 StorySaver',
-      desc: 'Download Facebook stories',
+      name: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>StorySaver',
       type: 'toggle',
       key: 'devg0d-fb-story',
       init: initFbStorySaver,
