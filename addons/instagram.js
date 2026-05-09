@@ -61,6 +61,49 @@
       return idx;
     }
 
+    // exact same as ig-story-test.user.js
+    function getVideoRealUrl(video) {
+      const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
+      if (!fiberKey) return null;
+      try {
+        let fiber = video[fiberKey];
+        for (let i = 0; i < 30 && fiber; i++) {
+          const props = fiber.memoizedProps || fiber.pendingProps;
+          if (props) {
+            const impl = props.implementations
+              ?? props.children?.[0]?.props?.children?.props?.implementations
+              ?? props.children?.props?.children?.props?.implementations;
+            if (impl) {
+              for (const idx of [1, 0, 2]) {
+                const s = impl[idx]?.data;
+                const u = s?.hdSrc || s?.sdSrc || s?.hd_src || s?.sd_src;
+                if (u) return u;
+              }
+            }
+            if (props.src && !props.src.startsWith('blob:')) return props.src;
+            const vd = props.videoData;
+            if (vd) { const u = vd.hd_src || vd.sd_src || vd.$1?.hd_src || vd.$1?.sd_src; if (u) return u; }
+          }
+          fiber = fiber.return;
+        }
+      } catch(e) {}
+      const propsKey = fiberKey.replace('__reactFiber', '__reactProps');
+      let el = video;
+      for (let i = 0; i < 8; i++) {
+        el = el.parentElement; if (!el) break;
+        const p = el[propsKey]; if (!p) continue;
+        const impl = p.children?.[0]?.props?.children?.props?.implementations ?? p.children?.props?.children?.props?.implementations;
+        if (impl) {
+          for (const idx of [1, 0, 2]) {
+            const s = impl[idx]?.data;
+            const u = s?.hdSrc || s?.sdSrc || s?.hd_src || s?.sd_src;
+            if (u) return u;
+          }
+        }
+      }
+      return null;
+    }
+
     async function fetchStoryMedia() {
       const username = getStoryUsername();
       if (!username) return null;
@@ -102,9 +145,12 @@
     }
 
     async function detectCurrentMedia() {
-      try { const m = await fetchStoryMedia(); if (m) return m; } catch(e) {}
+      try { const m = await fetchStoryMedia(); if (m) return m; } catch(e) {
+        console.warn('[DEV/g0d] fetchStoryMedia failed, falling back to DOM:', e);
+      }
+      // DOM fallback (ighelper pattern)
       const video = document.querySelector('body > div section video[playsinline]');
-      if (video && video.src && !video.src.startsWith('blob:')) return { url: video.src, ext: 'mp4' };
+      if (video) { const url = getVideoRealUrl(video); if (url) return { url, ext: 'mp4' }; }
       const imgEl = document.querySelector('body > div section img[referrerpolicy][class]')
                  || document.querySelector('body > div section img._aa63');
       if (imgEl) {
@@ -117,7 +163,7 @@
 
     async function downloadCurrent() {
       const media = await detectCurrentMedia();
-      if (!media) return;
+      if (!media) { console.warn('[DEV/g0d] No media found'); return; }
       const username = getStoryUsername() || 'unknown';
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const filename = `${username}_${ts}.${media.ext}`;
@@ -194,6 +240,82 @@
     const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
     const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
 
+    // exact same as ig-story-test.user.js
+    function fetchMediaByShortcode(shortcode) {
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: `https://www.instagram.com/graphql/query/?query_hash=2c4c2e343a8f64c625ba02b2aa12c7f8&variables=%7B%22shortcode%22:%22${shortcode}%22%7D`,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Pixel 7 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36 Instagram 307.0.0.34.111' },
+          onload: res => {
+            try {
+              const obj = JSON.parse(res.responseText);
+              if (obj.status === 'fail') { reject('fail'); return; }
+              resolve(obj.data?.shortcode_media ?? obj.data);
+            } catch(e) { reject(e); }
+          },
+          onerror: reject,
+        });
+      });
+    }
+
+    function fetchMediaByQueryID(shortcode) {
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: `https://www.instagram.com/graphql/query/?query_id=9496392173716084&variables={%22shortcode%22:%22${shortcode}%22,%22__relay_internal__pv__PolarisFeedShareMenurelayprovider%22:true,%22__relay_internal__pv__PolarisIsLoggedInrelayprovider%22:true}`,
+          onload: res => {
+            try { resolve(JSON.parse(res.responseText).data?.xdt_api__v1__media__shortcode__web_info?.items?.[0]); }
+            catch(e) { reject(e); }
+          },
+          onerror: reject,
+        });
+      });
+    }
+
+    // exact same React fiber walk as ig-story-test.user.js
+    function getVideoRealUrl(video) {
+      const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
+      if (!fiberKey) return null;
+      try {
+        let fiber = video[fiberKey];
+        for (let i = 0; i < 30 && fiber; i++) {
+          const props = fiber.memoizedProps || fiber.pendingProps;
+          if (props) {
+            const impl = props.implementations
+              ?? props.children?.[0]?.props?.children?.props?.implementations
+              ?? props.children?.props?.children?.props?.implementations;
+            if (impl) {
+              for (const idx of [1, 0, 2]) {
+                const s = impl[idx]?.data;
+                const u = s?.hdSrc || s?.sdSrc || s?.hd_src || s?.sd_src;
+                if (u) return u;
+              }
+            }
+            if (props.src && !props.src.startsWith('blob:')) return props.src;
+            const vd = props.videoData;
+            if (vd) { const u = vd.hd_src || vd.sd_src || vd.$1?.hd_src || vd.$1?.sd_src; if (u) return u; }
+          }
+          fiber = fiber.return;
+        }
+      } catch(e) {}
+      const propsKey = fiberKey.replace('__reactFiber', '__reactProps');
+      let el = video;
+      for (let i = 0; i < 8; i++) {
+        el = el.parentElement; if (!el) break;
+        const p = el[propsKey]; if (!p) continue;
+        const impl = p.children?.[0]?.props?.children?.props?.implementations ?? p.children?.props?.children?.props?.implementations;
+        if (impl) {
+          for (const idx of [1, 0, 2]) {
+            const s = impl[idx]?.data;
+            const u = s?.hdSrc || s?.sdSrc || s?.hd_src || s?.sd_src;
+            if (u) return u;
+          }
+        }
+      }
+      return null;
+    }
+
     const style = document.createElement('style');
     style.textContent = `
       .dg-reel-wrap{position:absolute;right:40px;top:15px;display:flex;flex-direction:column;gap:6px;z-index:9999;line-height:0}
@@ -203,45 +325,32 @@
     `;
     document.head.appendChild(style);
 
-    function fetchReelMedia(shortcode) {
-      return new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: 'GET',
-          url: `https://www.instagram.com/graphql/query/?query_hash=2c4c2e343a8f64c625ba02b2aa12c7f8&variables=%7B%22shortcode%22:%22${shortcode}%22%7D`,
-          headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Pixel 7 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36 Instagram 307.0.0.34.111' },
-          onload: res => {
-            try {
-              const obj = JSON.parse(res.responseText);
-              const media = obj.data?.shortcode_media ?? obj.data;
-              if (media?.video_url) resolve({ url: media.video_url, ext: 'mp4' });
-              else reject('no video');
-            } catch(e) { reject(e); }
-          },
-          onerror: reject,
-        });
-      });
-    }
-
+    // exact same as ig-story-test.user.js injectReelButtons
     function injectReelButtons(container) {
       if (container.querySelector('.dg-reel-wrap')) return;
 
-      Array.from(container.children).forEach(child => {
+      const children = Array.from(container.children);
+      children.forEach(child => {
         if (getComputedStyle(child).position === 'static') child.style.position = 'relative';
       });
 
       const wrap = document.createElement('div');
       wrap.className = 'dg-reel-wrap';
 
-      const getShortcode = () => location.href.split('?')[0].split('instagram.com/reels/').at(-1).replace(/\//g, '');
-
       const dlBtn = document.createElement('button');
       dlBtn.title = 'Download'; dlBtn.innerHTML = DL_SVG;
       dlBtn.onclick = async (e) => {
         e.preventDefault(); e.stopPropagation();
-        const sc = getShortcode(); if (!sc) return;
+        const shortcode = location.href.split('?')[0].split('instagram.com/reels/').at(-1).replace(/\//g, '');
+        if (!shortcode) return;
         try {
-          const m = await fetchReelMedia(sc);
-          triggerDownload(m.url, m.ext);
+          let media = await fetchMediaByShortcode(shortcode).catch(() => null);
+          if (media?.video_url) { triggerDownload(media.video_url, 'mp4'); return; }
+          const item = await fetchMediaByQueryID(shortcode).catch(() => null);
+          if (item?.video_versions?.[0]?.url) { triggerDownload(item.video_versions[0].url, 'mp4'); return; }
+          // fallback: React fiber
+          const video = container.querySelector('video');
+          if (video) { const url = getVideoRealUrl(video); if (url) triggerDownload(url, 'mp4'); }
         } catch(e) { console.error('[DEV/g0d] reel download error:', e); }
       };
 
@@ -249,15 +358,18 @@
       openBtn.title = 'Open in new tab'; openBtn.innerHTML = OPEN_SVG;
       openBtn.onclick = async (e) => {
         e.preventDefault(); e.stopPropagation();
-        const sc = getShortcode(); if (!sc) return;
+        const shortcode = location.href.split('?')[0].split('instagram.com/reels/').at(-1).replace(/\//g, '');
+        if (!shortcode) return;
         try {
-          const m = await fetchReelMedia(sc);
-          window.open(m.url, '_blank');
+          let media = await fetchMediaByShortcode(shortcode).catch(() => null);
+          if (media?.video_url) { window.open(media.video_url, '_blank'); return; }
+          const item = await fetchMediaByQueryID(shortcode).catch(() => null);
+          if (item?.video_versions?.[0]?.url) { window.open(item.video_versions[0].url, '_blank'); return; }
         } catch(e) {}
       };
 
       wrap.append(dlBtn, openBtn);
-      if (container.children[0]) container.children[0].appendChild(wrap);
+      if (children[0]) children[0].appendChild(wrap);
       else container.appendChild(wrap);
     }
 
@@ -309,10 +421,11 @@
     })();
   }
 
-  // ─── 2. Content Downloader (feed posts, reels) ────────────────────────────
+  // ─── 2. Content Downloader (feed posts) ──────────────────────────────────
   function initIgContentDownloader() {
 
     function getShortcode(article) {
+      if (!article) return null;
       for (const a of article.querySelectorAll('a[href]')) {
         const m = a.href.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
         if (m) return m[2];
@@ -323,9 +436,9 @@
 
     function fetchMediaByShortcode(shortcode) {
       return new Promise((resolve, reject) => {
+        const url = `https://www.instagram.com/graphql/query/?query_hash=2c4c2e343a8f64c625ba02b2aa12c7f8&variables=%7B%22shortcode%22:%22${shortcode}%22%7D`;
         GM_xmlhttpRequest({
-          method: 'GET',
-          url: `https://www.instagram.com/graphql/query/?query_hash=2c4c2e343a8f64c625ba02b2aa12c7f8&variables=%7B%22shortcode%22:%22${shortcode}%22%7D`,
+          method: 'GET', url,
           headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Pixel 7 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36 Instagram 307.0.0.34.111' },
           onload: res => {
             try {
@@ -341,34 +454,93 @@
 
     function fetchMediaByQueryID(shortcode) {
       return new Promise((resolve, reject) => {
+        const url = `https://www.instagram.com/graphql/query/?query_id=9496392173716084&variables={%22shortcode%22:%22${shortcode}%22,%22__relay_internal__pv__PolarisFeedShareMenurelayprovider%22:true,%22__relay_internal__pv__PolarisIsLoggedInrelayprovider%22:true}`;
         GM_xmlhttpRequest({
-          method: 'GET',
-          url: `https://www.instagram.com/graphql/query/?query_id=9496392173716084&variables={%22shortcode%22:%22${shortcode}%22,%22__relay_internal__pv__PolarisFeedShareMenurelayprovider%22:true,%22__relay_internal__pv__PolarisIsLoggedInrelayprovider%22:true}`,
+          method: 'GET', url,
           onload: res => {
-            try { resolve(JSON.parse(res.responseText).data?.xdt_api__v1__media__shortcode__web_info?.items?.[0]); }
-            catch(e) { reject(e); }
+            try {
+              const obj = JSON.parse(res.responseText);
+              const item = obj.data?.xdt_api__v1__media__shortcode__web_info?.items?.[0];
+              resolve(item);
+            } catch(e) { reject(e); }
           },
           onerror: reject,
         });
       });
     }
 
-    async function getMediaUrl(shortcode, openOnly = false) {
-      let media = await fetchMediaByShortcode(shortcode).catch(() => null);
-      if (media) {
-        if (media.video_url) return { url: media.video_url, ext: 'mp4' };
-        if (media.edge_sidecar_to_children) {
-          const node = media.edge_sidecar_to_children.edges[0]?.node;
-          if (node?.video_url) return { url: node.video_url, ext: 'mp4' };
-          if (node?.display_url) return { url: node.display_url, ext: 'jpg' };
+    function getVideoRealUrl(video) {
+      const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
+      if (!fiberKey) return null;
+      try {
+        let fiber = video[fiberKey];
+        for (let i = 0; i < 30 && fiber; i++) {
+          const props = fiber.memoizedProps || fiber.pendingProps;
+          if (props) {
+            const impl = props.implementations ?? props.children?.[0]?.props?.children?.props?.implementations ?? props.children?.props?.children?.props?.implementations;
+            if (impl) { for (const idx of [1,0,2]) { const s=impl[idx]?.data; const u=s?.hdSrc||s?.sdSrc||s?.hd_src||s?.sd_src; if (u) return u; } }
+            if (props.src && !props.src.startsWith('blob:')) return props.src;
+            const vd = props.videoData;
+            if (vd) { const u=vd.hd_src||vd.sd_src||vd.$1?.hd_src||vd.$1?.sd_src; if (u) return u; }
+          }
+          fiber = fiber.return;
         }
-        const imgUrl = media.display_resources?.at(-1)?.src || media.display_url;
-        if (imgUrl) return { url: imgUrl, ext: 'jpg' };
+      } catch(e) {}
+      const propsKey = fiberKey.replace('__reactFiber','__reactProps');
+      let el = video;
+      for (let i=0;i<8;i++) {
+        el=el.parentElement; if (!el) break;
+        const p=el[propsKey]; if (!p) continue;
+        const impl=p.children?.[0]?.props?.children?.props?.implementations??p.children?.props?.children?.props?.implementations;
+        if (impl) { for (const idx of [1,0,2]) { const s=impl[idx]?.data; const u=s?.hdSrc||s?.sdSrc||s?.hd_src||s?.sd_src; if (u) return u; } }
       }
-      const item = await fetchMediaByQueryID(shortcode).catch(() => null);
-      if (item?.video_versions?.length) return { url: item.video_versions[0].url, ext: 'mp4' };
-      if (item?.image_versions2?.candidates?.length) return { url: item.image_versions2.candidates[0].url, ext: 'jpg' };
       return null;
+    }
+
+    async function downloadFeedMedia(src, article) {
+      const shortcode = getShortcode(article);
+      if (shortcode) {
+        try {
+          let media = await fetchMediaByShortcode(shortcode).catch(() => null);
+          if (media) {
+            if (media.video_url) { triggerDownload(media.video_url, 'mp4'); return; }
+            if (media.edge_sidecar_to_children) {
+              const items = media.edge_sidecar_to_children.edges.map(e => e.node);
+              const item = items[0];
+              if (item.video_url) { triggerDownload(item.video_url, 'mp4'); return; }
+              if (item.display_url) { triggerDownload(item.display_url, 'jpg'); return; }
+            }
+            const imgUrl = media.display_resources?.at(-1)?.src || media.display_url;
+            if (imgUrl) { triggerDownload(imgUrl, 'jpg'); return; }
+          }
+          const item = await fetchMediaByQueryID(shortcode).catch(() => null);
+          if (item) {
+            if (item.video_versions?.length) { triggerDownload(item.video_versions[0].url, 'mp4'); return; }
+            if (item.image_versions2?.candidates?.length) { triggerDownload(item.image_versions2.candidates[0].url, 'jpg'); return; }
+          }
+        } catch(e) { console.error('[DEV/g0d] fetchMedia error:', e); }
+      }
+      if (src && !src.startsWith('blob:')) { triggerDownload(src, 'jpg'); return; }
+      const video = article?.querySelector('video');
+      if (video) { const url = getVideoRealUrl(video); if (url) { triggerDownload(url, 'mp4'); return; } }
+      console.warn('[DEV/g0d] Could not get media URL');
+    }
+
+    async function openFeedMedia(article) {
+      const shortcode = getShortcode(article);
+      if (!shortcode) return;
+      try {
+        let media = await fetchMediaByShortcode(shortcode).catch(() => null);
+        if (media?.video_url) { window.open(media.video_url, '_blank'); return; }
+        if (media?.display_url) { window.open(media.display_url, '_blank'); return; }
+        if (media?.edge_sidecar_to_children) {
+          const node = media.edge_sidecar_to_children.edges[0]?.node;
+          window.open(node?.video_url || node?.display_url, '_blank'); return;
+        }
+        const item = await fetchMediaByQueryID(shortcode).catch(() => null);
+        if (item?.video_versions?.[0]?.url) { window.open(item.video_versions[0].url, '_blank'); return; }
+        if (item?.image_versions2?.candidates?.[0]?.url) { window.open(item.image_versions2.candidates[0].url, '_blank'); return; }
+      } catch(e) { console.error('[DEV/g0d] openFeedMedia error:', e); }
     }
 
     const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
@@ -376,10 +548,10 @@
 
     const style = document.createElement('style');
     style.textContent = `
-      .dg-feed-wrap{position:absolute;top:12px;right:12px;display:flex;flex-flow:row-reverse;gap:6px;z-index:9999;line-height:0}
-      .dg-feed-wrap button{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.92);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#1a1a1a;box-shadow:0 1px 6px rgba(0,0,0,.25);transition:transform .15s,background .15s;padding:0}
-      .dg-feed-wrap button:hover{background:#fff;transform:scale(1.1)}
-      .dg-feed-wrap button svg{width:16px;height:16px}
+      .dg-btn-wrap{position:absolute;top:12px;right:12px;display:flex;flex-flow:row-reverse;gap:6px;z-index:9999;line-height:0}
+      .dg-btn-wrap button{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.92);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#1a1a1a;box-shadow:0 1px 6px rgba(0,0,0,.25);transition:transform .15s,background .15s;padding:0}
+      .dg-btn-wrap button:hover{background:#fff;transform:scale(1.1)}
+      .dg-btn-wrap button svg{width:16px;height:16px}
     `;
     document.head.appendChild(style);
 
@@ -404,40 +576,32 @@
             .some(a => !a.getAttribute('href').startsWith('/p/') && !a.getAttribute('href').startsWith('/reels/'))
         : false;
 
+      const topOffset = isNewPostStyle ? '45px' : '15px';
+
       const wrap = document.createElement('div');
-      wrap.className = 'dg-feed-wrap';
-      wrap.style.top = isNewPostStyle ? '45px' : '12px';
+      wrap.className = 'dg-btn-wrap';
+      wrap.style.top = topOffset;
 
       const dlBtn = document.createElement('button');
       dlBtn.title = 'Download'; dlBtn.innerHTML = DL_SVG;
-      dlBtn.onclick = async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const sc = getShortcode(article); if (!sc) return;
-        const m = await getMediaUrl(sc);
-        if (m) triggerDownload(m.url, m.ext);
-      };
+      dlBtn.onclick = async (e) => { e.preventDefault(); e.stopPropagation(); await downloadFeedMedia('', article); };
 
       const openBtn = document.createElement('button');
       openBtn.title = 'Open in new tab'; openBtn.innerHTML = OPEN_SVG;
-      openBtn.onclick = async (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const sc = getShortcode(article); if (!sc) return;
-        const m = await getMediaUrl(sc);
-        if (m) window.open(m.url, '_blank');
-      };
+      openBtn.onclick = async (e) => { e.preventDefault(); e.stopPropagation(); await openFeedMedia(article); };
 
       wrap.append(dlBtn, openBtn);
       insertEl.appendChild(wrap);
     }
 
-    function scan() {
+    function scanArticles() {
       document.querySelectorAll('article:not([data-dg-feed])').forEach(el => {
         if (el.offsetHeight > 0 && el.offsetWidth > 0) injectFeedButtons(el);
       });
     }
 
-    setInterval(scan, 1000);
-    new MutationObserver(scan).observe(document.body, { childList: true, subtree: true });
+    setInterval(scanArticles, 1000);
+    new MutationObserver(scanArticles).observe(document.body, { childList: true, subtree: true });
   }
 
   // ─── Register Plugins ─────────────────────────────────────────────────────
