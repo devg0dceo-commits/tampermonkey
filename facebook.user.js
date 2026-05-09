@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         DEV/g0d Facebook
 // @namespace    FREELOADING
-// @version      2.0
-// @description  DEV/g0d - Facebook tools
+// @version      2.1
+// @description  DEV/g0d - Facebook tools (Fixed Cross-domain loading)
 // @author       DEV/g0d
 // @license      MIT
 // @match        *://www.facebook.com/*
 // @match        *://facebook.com/*
+// @exclude      *://*.facebook.com/messages/*
 // @exclude      *://www.instagram.com/*
 // @exclude      *://instagram.com/*
 // @exclude      *://*.instagram.com/*
@@ -22,7 +23,9 @@
 
 (function () {
   'use strict';
+
   if (window.self !== window.top) return;
+  if (!window.location.hostname.includes('facebook.com')) return;
 
   const getKey = (k) => localStorage.getItem(k) !== 'false';
   const setKey = (k, v) => localStorage.setItem(k, v ? 'true' : 'false');
@@ -113,7 +116,7 @@
     input.onchange = (e) => {
       e.stopPropagation();
       setKey(p.key, input.checked);
-      alert(`"${p.name}" ${input.checked?'enabled':'disabled'} — reload to apply.`);
+      console.log(`[DEV/g0d] "${p.name}" ${input.checked?'enabled':'disabled'} — reload to apply.`);
     };
   });
 
