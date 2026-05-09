@@ -1,16 +1,12 @@
 // ==UserScript==
 // @name         DEV/g0d Instagram
 // @namespace    FREELOADING
-// @version      2.1
-// @description  DEV/g0d - Instagram tools (Fixed Cross-domain loading)
+// @version      2.0
+// @description  DEV/g0d - Instagram tools
 // @author       DEV/g0d
 // @license      MIT
 // @match        *://www.instagram.com/*
 // @match        *://instagram.com/*
-// @exclude      *://www.facebook.com/*
-// @exclude      *://facebook.com/*
-// @exclude      *://*.facebook.com/*
-// @exclude      *://*.fbcdn.net/*
 // @icon         https://instagram.com/favicon.ico
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
@@ -23,8 +19,7 @@
 
 (function () {
   'use strict';
-
-  if (!window.location.hostname.includes('instagram.com')) return;
+  // if (window.self !== window.top) return; // disabled — IG may render in iframe
 
   const getKey = (k) => localStorage.getItem(k) !== 'false';
   const setKey = (k, v) => localStorage.setItem(k, v ? 'true' : 'false');
@@ -83,8 +78,6 @@
   const plugins = window.DEVg0d_PLUGINS || [];
 
   function init() {
-    if (document.getElementById('dg-ig-tab')) return;
-
     const tab = document.createElement('div');
     tab.id = 'dg-ig-tab';
     tab.textContent = L ? '›' : '‹';
@@ -118,7 +111,7 @@
       input.onchange = (e) => {
         e.stopPropagation();
         setKey(p.key, input.checked);
-        console.log(`[DEV/g0d] "${p.name}" ${input.checked?'enabled':'disabled'} — reload to apply.`);
+        alert(`"${p.name}" ${input.checked?'enabled':'disabled'} — reload to apply.`);
       };
     });
 
