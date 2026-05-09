@@ -20,7 +20,6 @@
   const PATCH_URL = 'https://cdn.jsdelivr.net/gh/devg0dceo-commits/tampermonkey@master/addons/twitch.js';
   const KEY_NOSUB = 'devg0d-twitch-nosub';
 
-  // ── UI (popup + toggle) ───────────────────────────────────────────────────
   function initUI() {
     const L = (localStorage.getItem('devg0d-menu-pos') || 'right') === 'left';
     const enabled = localStorage.getItem(KEY_NOSUB) !== 'false';
@@ -104,7 +103,6 @@
     };
   }
 
-  // ── Worker Patch (only when enabled) ─────────────────────────────────────
   function initPatch() {
     if (localStorage.getItem(KEY_NOSUB) === 'false') return;
 
@@ -128,7 +126,6 @@
       }
     };
 
-    // Remove sub-only restriction badges
     const removeRestrictions = () =>
       document.querySelectorAll('.video-preview-card-restriction').forEach(el => el.remove());
 
@@ -145,10 +142,8 @@
     removeRestrictions();
   }
 
-  // Worker patch ต้อง run ก่อน document ready
   initPatch();
 
-  // UI รอ body พร้อมก่อน
   if (document.body) initUI();
   else document.addEventListener('DOMContentLoaded', initUI);
 
