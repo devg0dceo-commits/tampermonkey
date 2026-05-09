@@ -15,7 +15,7 @@
         if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
           e.stopPropagation();
           e.preventDefault();
-          el.dispatchEvent(new MouseEvent(e.type, { bubbles: false, cancelable: true, clientX: e.clientX, clientY: e.clientY, view: window }));
+          el.dispatchEvent(new MouseEvent(e.type, { bubbles: false, cancelable: true, clientX: e.clientX, clientY: e.clientY }));
           return;
         }
       }
