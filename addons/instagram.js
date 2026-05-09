@@ -190,6 +190,137 @@
     })();
   }
 
+  // ─── 2. Content Downloader (feed posts, reels) ────────────────────────────
+  function initIgContentDownloader() {
+
+    function getShortcode(article) {
+      for (const a of article.querySelectorAll('a[href]')) {
+        const m = a.href.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
+        if (m) return m[2];
+      }
+      const m = location.pathname.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
+      return m ? m[2] : null;
+    }
+
+    function fetchMediaByShortcode(shortcode) {
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: `https://www.instagram.com/graphql/query/?query_hash=2c4c2e343a8f64c625ba02b2aa12c7f8&variables=%7B%22shortcode%22:%22${shortcode}%22%7D`,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Pixel 7 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36 Instagram 307.0.0.34.111' },
+          onload: res => {
+            try {
+              const obj = JSON.parse(res.responseText);
+              if (obj.status === 'fail') { reject('fail'); return; }
+              resolve(obj.data?.shortcode_media ?? obj.data);
+            } catch(e) { reject(e); }
+          },
+          onerror: reject,
+        });
+      });
+    }
+
+    function fetchMediaByQueryID(shortcode) {
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: `https://www.instagram.com/graphql/query/?query_id=9496392173716084&variables={%22shortcode%22:%22${shortcode}%22,%22__relay_internal__pv__PolarisFeedShareMenurelayprovider%22:true,%22__relay_internal__pv__PolarisIsLoggedInrelayprovider%22:true}`,
+          onload: res => {
+            try { resolve(JSON.parse(res.responseText).data?.xdt_api__v1__media__shortcode__web_info?.items?.[0]); }
+            catch(e) { reject(e); }
+          },
+          onerror: reject,
+        });
+      });
+    }
+
+    async function getMediaUrl(shortcode, openOnly = false) {
+      let media = await fetchMediaByShortcode(shortcode).catch(() => null);
+      if (media) {
+        if (media.video_url) return { url: media.video_url, ext: 'mp4' };
+        if (media.edge_sidecar_to_children) {
+          const node = media.edge_sidecar_to_children.edges[0]?.node;
+          if (node?.video_url) return { url: node.video_url, ext: 'mp4' };
+          if (node?.display_url) return { url: node.display_url, ext: 'jpg' };
+        }
+        const imgUrl = media.display_resources?.at(-1)?.src || media.display_url;
+        if (imgUrl) return { url: imgUrl, ext: 'jpg' };
+      }
+      const item = await fetchMediaByQueryID(shortcode).catch(() => null);
+      if (item?.video_versions?.length) return { url: item.video_versions[0].url, ext: 'mp4' };
+      if (item?.image_versions2?.candidates?.length) return { url: item.image_versions2.candidates[0].url, ext: 'jpg' };
+      return null;
+    }
+
+    const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
+    const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      .dg-feed-wrap{position:absolute;top:12px;right:12px;display:flex;flex-flow:row-reverse;gap:6px;z-index:9999;line-height:0}
+      .dg-feed-wrap button{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.92);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#1a1a1a;box-shadow:0 1px 6px rgba(0,0,0,.25);transition:transform .15s,background .15s;padding:0}
+      .dg-feed-wrap button:hover{background:#fff;transform:scale(1.1)}
+      .dg-feed-wrap button svg{width:16px;height:16px}
+    `;
+    document.head.appendChild(style);
+
+    function injectFeedButtons(article) {
+      if (article.getAttribute('data-dg-feed')) return;
+      if (article.classList.contains('x1iyjqo2')) return;
+      article.setAttribute('data-dg-feed', '1');
+
+      const tagName = article.tagName;
+      const childEls = Array.from(article.querySelectorAll(':scope > div > div'));
+      if (!childEls.length) return;
+
+      const targetIdx = (tagName === 'DIV') ? 0 : Math.max(0, childEls.length - 2);
+      const insertEl = childEls[targetIdx];
+      if (!insertEl) return;
+
+      insertEl.style.position = 'relative';
+
+      const resourceLayout = childEls.find(el => el.offsetWidth > 100 && el.offsetHeight > 100);
+      const isNewPostStyle = resourceLayout
+        ? Array.from(resourceLayout.querySelectorAll('a[role="link"][tabindex="0"][href^="/"]'))
+            .some(a => !a.getAttribute('href').startsWith('/p/') && !a.getAttribute('href').startsWith('/reels/'))
+        : false;
+
+      const wrap = document.createElement('div');
+      wrap.className = 'dg-feed-wrap';
+      wrap.style.top = isNewPostStyle ? '45px' : '12px';
+
+      const dlBtn = document.createElement('button');
+      dlBtn.title = 'Download'; dlBtn.innerHTML = DL_SVG;
+      dlBtn.onclick = async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const sc = getShortcode(article); if (!sc) return;
+        const m = await getMediaUrl(sc);
+        if (m) triggerDownload(m.url, m.ext);
+      };
+
+      const openBtn = document.createElement('button');
+      openBtn.title = 'Open in new tab'; openBtn.innerHTML = OPEN_SVG;
+      openBtn.onclick = async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const sc = getShortcode(article); if (!sc) return;
+        const m = await getMediaUrl(sc);
+        if (m) window.open(m.url, '_blank');
+      };
+
+      wrap.append(dlBtn, openBtn);
+      insertEl.appendChild(wrap);
+    }
+
+    function scan() {
+      document.querySelectorAll('article:not([data-dg-feed])').forEach(el => {
+        if (el.offsetHeight > 0 && el.offsetWidth > 0) injectFeedButtons(el);
+      });
+    }
+
+    setInterval(scan, 1000);
+    new MutationObserver(scan).observe(document.body, { childList: true, subtree: true });
+  }
+
   // ─── Register Plugins ─────────────────────────────────────────────────────
   const icon = (d) => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">${d}</svg>`;
 
@@ -199,6 +330,12 @@
       type: 'toggle',
       key: 'devg0d-ig-story',
       init: initIgStorySaver,
+    },
+    {
+      name: icon('<rect x="2" y="2" width="20" height="20" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="#8b949e"/>') + 'ContentDownloader',
+      type: 'toggle',
+      key: 'devg0d-ig-content',
+      init: initIgContentDownloader,
     },
     {
       name: icon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>') + 'AllowSave',
