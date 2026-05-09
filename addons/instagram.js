@@ -3,6 +3,24 @@
 (function () {
 
   // ─── Shared helpers ───────────────────────────────────────────────────────
+
+  // ShieldBypass: intercept clicks before IG overlay (same as Instagram_Video_Controls)
+  ;['mousedown','mouseup','click'].forEach(type => {
+    window.addEventListener(type, (e) => {
+      if (!e.isTrusted) return;
+      const els = document.querySelectorAll('.dg-feed-wrap button, .dg-reel-wrap button');
+      for (const el of els) {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+          e.stopPropagation();
+          e.preventDefault();
+          el.dispatchEvent(new MouseEvent(e.type, { bubbles: false, cancelable: true, clientX: e.clientX, clientY: e.clientY, view: window }));
+          return;
+        }
+      }
+    }, true);
+  });
   function getAppID() {
     for (const s of document.querySelectorAll('script[type="application/json"]')) {
       const m = s.textContent.match(/"APP_ID":"(\d+)"/i); if (m) return m[1];
