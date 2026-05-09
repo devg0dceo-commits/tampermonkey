@@ -7,7 +7,6 @@
 // @license      MIT
 // @match        *://www.facebook.com/*
 // @match        *://facebook.com/*
-// @exclude      *://*.facebook.com/messages/*
 // @exclude      *://www.instagram.com/*
 // @exclude      *://instagram.com/*
 // @exclude      *://*.instagram.com/*
