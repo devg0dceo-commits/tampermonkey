@@ -170,6 +170,107 @@
     checkPage();
   }
 
+  // ─── 3. Reels Downloader ──────────────────────────────────────────────────
+  function initIgReelsDownloader() {
+
+    const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
+    const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      .dg-reel-wrap{position:absolute;right:40px;top:15px;display:flex;flex-direction:column;gap:6px;z-index:9999;line-height:0}
+      .dg-reel-wrap button{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.92);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#1a1a1a;box-shadow:0 1px 6px rgba(0,0,0,.25);transition:transform .15s,background .15s;padding:0}
+      .dg-reel-wrap button:hover{background:#fff;transform:scale(1.1)}
+      .dg-reel-wrap button svg{width:16px;height:16px}
+    `;
+    document.head.appendChild(style);
+
+    function fetchReelMedia(shortcode) {
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: `https://www.instagram.com/graphql/query/?query_hash=2c4c2e343a8f64c625ba02b2aa12c7f8&variables=%7B%22shortcode%22:%22${shortcode}%22%7D`,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Pixel 7 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36 Instagram 307.0.0.34.111' },
+          onload: res => {
+            try {
+              const obj = JSON.parse(res.responseText);
+              const media = obj.data?.shortcode_media ?? obj.data;
+              if (media?.video_url) resolve({ url: media.video_url, ext: 'mp4' });
+              else reject('no video');
+            } catch(e) { reject(e); }
+          },
+          onerror: reject,
+        });
+      });
+    }
+
+    function injectReelButtons(container) {
+      if (container.querySelector('.dg-reel-wrap')) return;
+
+      Array.from(container.children).forEach(child => {
+        if (getComputedStyle(child).position === 'static') child.style.position = 'relative';
+      });
+
+      const wrap = document.createElement('div');
+      wrap.className = 'dg-reel-wrap';
+
+      const getShortcode = () => location.href.split('?')[0].split('instagram.com/reels/').at(-1).replace(/\//g, '');
+
+      const dlBtn = document.createElement('button');
+      dlBtn.title = 'Download'; dlBtn.innerHTML = DL_SVG;
+      dlBtn.onclick = async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const sc = getShortcode(); if (!sc) return;
+        try {
+          const m = await fetchReelMedia(sc);
+          triggerDownload(m.url, m.ext);
+        } catch(e) { console.error('[DEV/g0d] reel download error:', e); }
+      };
+
+      const openBtn = document.createElement('button');
+      openBtn.title = 'Open in new tab'; openBtn.innerHTML = OPEN_SVG;
+      openBtn.onclick = async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const sc = getShortcode(); if (!sc) return;
+        try {
+          const m = await fetchReelMedia(sc);
+          window.open(m.url, '_blank');
+        } catch(e) {}
+      };
+
+      wrap.append(dlBtn, openBtn);
+      if (container.children[0]) container.children[0].appendChild(wrap);
+      else container.appendChild(wrap);
+    }
+
+    function scan() {
+      if (!location.pathname.startsWith('/reels/')) return;
+      document.querySelectorAll('div[aria-busy][tabindex] > div').forEach(el => {
+        if (el.offsetWidth > window.innerWidth * 0.8 &&
+            el.offsetHeight > window.innerHeight * 0.8 &&
+            el.querySelector('video')) {
+          injectReelButtons(el);
+        }
+      });
+    }
+
+    let lastPath = '';
+    function checkReelPage() {
+      if (location.pathname === lastPath) return;
+      lastPath = location.pathname;
+      if (location.pathname.startsWith('/reels/')) {
+        document.querySelectorAll('.dg-reel-wrap').forEach(el => el.remove());
+        let attempts = 0;
+        const iv = setInterval(() => {
+          scan();
+          if (document.querySelector('.dg-reel-wrap') || ++attempts > 20) clearInterval(iv);
+        }, 250);
+      }
+    }
+
+    setInterval(checkReelPage, 500);
+  }
+
   // ─── Allow Save ───────────────────────────────────────────────────────────
   function initIgAllowSave() {
     (function() {
@@ -336,6 +437,12 @@
       type: 'toggle',
       key: 'devg0d-ig-content',
       init: initIgContentDownloader,
+    },
+    {
+      name: icon('<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>') + 'ReelsDownloader',
+      type: 'toggle',
+      key: 'devg0d-ig-reels',
+      init: initIgReelsDownloader,
     },
     {
       name: icon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>') + 'AllowSave',
