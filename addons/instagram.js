@@ -4,7 +4,7 @@
 
   // ─── Shared helpers ───────────────────────────────────────────────────────
 
-  // ShieldBypass: intercept clicks before IG overlay (same as Instagram_Video_Controls)
+  // ShieldBypass
   ;['mousedown','mouseup','click'].forEach(type => {
     window.addEventListener(type, (e) => {
       if (!e.isTrusted) return;
@@ -61,7 +61,6 @@
       return idx;
     }
 
-    // exact same as ig-story-test.user.js
     function getVideoRealUrl(video) {
       const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
       if (!fiberKey) return null;
@@ -240,7 +239,6 @@
     const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
     const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
 
-    // exact same as ig-story-test.user.js
     function fetchMediaByShortcode(shortcode) {
       return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
@@ -273,7 +271,6 @@
       });
     }
 
-    // exact same React fiber walk as ig-story-test.user.js
     function getVideoRealUrl(video) {
       const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
       if (!fiberKey) return null;
@@ -324,8 +321,7 @@
       .dg-reel-wrap button svg{width:16px;height:16px}
     `;
     document.head.appendChild(style);
-
-    // exact same as ig-story-test.user.js injectReelButtons
+    
     function injectReelButtons(container) {
       if (container.querySelector('.dg-reel-wrap')) return;
 
@@ -401,7 +397,349 @@
     setInterval(checkReelPage, 500);
   }
 
-  // ─── Allow Save ───────────────────────────────────────────────────────────
+  // ─── 4. Profile Downloader ────────────────────────────────────────────────
+  function initIgProfileDownloader() {
+
+    const style = document.createElement('style');
+    style.textContent = `
+      .dg-profile-btn {
+        position: absolute; right: 0; top: 0;
+        width: 32px; height: 32px;
+        background: rgba(0,0,0,0.6); border-radius: 50%;
+        cursor: pointer; border: 2px solid rgba(255,255,255,0.8);
+        z-index: 9999; display: flex;
+        align-items: center; justify-content: center;
+        backdrop-filter: blur(4px);
+        transition: transform .15s, background .15s;
+      }
+      .dg-profile-btn:hover { background: rgba(0,0,0,0.85); transform: scale(1.1); }
+      .dg-profile-btn svg { width: 16px; height: 16px; color: white; fill: white; }
+    `;
+    document.head.appendChild(style);
+
+    function getProfileUsername() {
+      return location.pathname.replace(/(reels|tagged|saved)\/?$/i, '').split('/').filter(s => s).at(-1);
+    }
+
+    async function downloadProfilePic(username) {
+      try {
+        const profileRes = await new Promise((resolve, reject) => {
+          GM_xmlhttpRequest({
+            method: 'GET',
+            url: `https://i.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
+            headers: { 'X-IG-App-ID': getAppID() },
+            onload: r => { try { resolve(JSON.parse(r.responseText)); } catch(e) { reject(e); } },
+            onerror: reject,
+          });
+        });
+
+        const userId = profileRes?.data?.user?.pk || profileRes?.data?.user?.id;
+        if (!userId) throw new Error('no user id');
+
+        const infoRes = await new Promise((resolve, reject) => {
+          GM_xmlhttpRequest({
+            method: 'GET',
+            url: `https://i.instagram.com/api/v1/users/${userId}/info/`,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Pixel 7 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36 Instagram 307.0.0.34.111' },
+            onload: r => { try { resolve(JSON.parse(r.responseText)); } catch(e) { reject(e); } },
+            onerror: reject,
+          });
+        });
+
+        const hdUrl = infoRes?.user?.hd_profile_pic_url_info?.url;
+        if (hdUrl) { triggerDownload(hdUrl, 'jpg'); return; }
+        const fallbackUrl = profileRes?.data?.user?.profile_pic_url;
+        if (fallbackUrl) { triggerDownload(fallbackUrl, 'jpg'); }
+      } catch(e) {
+        console.error('[DEV/g0d] profile pic download error:', e);
+      }
+    }
+
+    function injectProfileButton() {
+      if (document.querySelector('.dg-profile-btn')) return;
+
+      const selector = 'header > *[class]:first-child > *[class]:first-child img[alt]';
+      const imgDraggable = document.querySelector(`${selector}[draggable]`);
+      const imgNonDraggable = document.querySelector(`${selector}:not([draggable])`);
+
+      let container = null;
+      if (imgDraggable) {
+        container = imgDraggable.parentElement?.parentElement;
+      } else if (imgNonDraggable) {
+        container = imgNonDraggable.parentElement?.parentElement?.parentElement;
+      }
+
+      if (!container) return;
+
+      if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+
+      const btn = document.createElement('div');
+      btn.className = 'dg-profile-btn';
+      btn.title = 'Download profile picture';
+      btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
+      btn.onclick = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const username = getProfileUsername();
+        if (username) downloadProfilePic(username);
+      };
+      container.appendChild(btn);
+    }
+
+    function isProfilePage() {
+      return document.querySelector('header > *[class]:first-child img[alt]') !== null &&
+        /^(\/)([0-9A-Za-z.\-_]+)\/?(?:tagged|reels|saved)?\/?$/i.test(location.pathname) &&
+        !/^(\/explore\/?$|\/stories(\/.*)?$|\/p\/)/.test(location.pathname);
+    }
+
+    let lastProfilePath = '';
+    let profileObserver = null;
+
+    function checkProfilePage() {
+      const path = location.pathname;
+
+      if (!isProfilePage()) {
+        document.querySelector('.dg-profile-btn')?.remove();
+        return;
+      }
+
+      if (!document.querySelector('.dg-profile-btn')) {
+        injectProfileButton();
+      }
+
+      if (path !== lastProfilePath) {
+        lastProfilePath = path;
+        profileObserver?.disconnect();
+        const header = document.querySelector('header');
+        if (header) {
+          profileObserver = new MutationObserver(() => {
+            if (!document.querySelector('.dg-profile-btn')) {
+              injectProfileButton();
+            }
+          });
+          profileObserver.observe(header, { childList: true, subtree: true });
+        }
+      }
+    }
+
+    setInterval(checkProfilePage, 300);
+  }
+  // ─── 5. Video SeekBar ─────────────────────────────────────────────────────
+  function initIgSeekbar() {
+
+    // ShieldBypass
+    const ShieldBypass = {
+      init() {
+        ['mousedown', 'mouseup', 'click'].forEach(eventType => {
+          window.addEventListener(eventType, this.routeEvent.bind(this), true);
+        });
+      },
+      routeEvent(e) {
+        if (!e.isTrusted) return;
+        const customControls = document.querySelectorAll('.dg-sb-timeline-container');
+        for (const control of customControls) {
+          const rect = control.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) continue;
+          if (e.clientX >= rect.left && e.clientX <= rect.right &&
+              e.clientY >= rect.top && e.clientY <= rect.bottom) {
+            e.stopPropagation();
+            e.preventDefault();
+            const clonedEvent = new MouseEvent(e.type, {
+              bubbles: false, cancelable: true,
+              clientX: e.clientX, clientY: e.clientY
+            });
+            control.dispatchEvent(clonedEvent);
+            return;
+          }
+        }
+      }
+    };
+
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes dg-ig-grad {
+        0%   { background-position: 0% 50%; }
+        50%  { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+      }
+      .dg-sb-controls-wrapper { opacity: 0.94; transition: opacity 0.18s ease; }
+      .dg-sb-controls-wrapper:hover { opacity: 1; }
+      .dg-sb-control {
+        width: 100%;
+        background: linear-gradient(180deg, rgba(8,8,10,0), rgba(8,8,10,0.5));
+        display: flex; flex-direction: column;
+        z-index: 9999999; position: relative;
+        pointer-events: all; box-sizing: border-box; padding-top: 0;
+      }
+      .dg-sb-timeline-container {
+        width: 100%; height: 20px; position: relative;
+        cursor: pointer; padding: 8px 0 0;
+        box-sizing: border-box; z-index: 9999999;
+      }
+      .dg-sb-timeline {
+        width: 100%; height: 3px;
+        background: rgba(255,255,255,0.2);
+        position: relative; transition: height 0.1s;
+      }
+      .dg-sb-timeline-container:hover .dg-sb-timeline { height: 5px; }
+      .dg-sb-progress {
+        height: 100%; width: 0%;
+        position: absolute; top: 0; left: 0;
+        background: linear-gradient(90deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888, #9b59b6);
+        background-size: 300% 100%;
+        animation: dg-ig-grad 2s ease infinite;
+      }
+      .dg-sb-seek-handle {
+        width: 12px; height: 12px; background: #fff;
+        border-radius: 50%; position: absolute;
+        right: -6px; top: 50%;
+        transform: translateY(-50%) scale(0);
+        transition: transform 0.1s;
+        box-shadow: 0 0 4px rgba(0,0,0,.5);
+      }
+      .dg-sb-timeline-container:hover .dg-sb-seek-handle { transform: translateY(-50%) scale(1); }
+    `;
+    document.head.appendChild(style);
+
+    class Seekbar {
+      constructor(videoElement) {
+        this.video = videoElement;
+        this.isDragging = false;
+        this.container = this.createContainer();
+      }
+
+      createContainer() {
+        const control = document.createElement('div');
+        control.className = 'dg-sb-control';
+        control.appendChild(this.createTimeline());
+        return control;
+      }
+
+      createTimeline() {
+        const timeline = document.createElement('div');
+        timeline.className = 'dg-sb-timeline';
+
+        const progress = document.createElement('div');
+        progress.className = 'dg-sb-progress';
+
+        const seekHandle = document.createElement('div');
+        seekHandle.className = 'dg-sb-seek-handle';
+
+        const tooltip = document.createElement('div');
+        tooltip.className = 'dg-sb-tooltip';
+        Object.assign(tooltip.style, {
+          position: 'absolute', bottom: 'calc(100% + 8px)',
+          transform: 'translateX(-50%)', background: 'rgba(8,8,10,0.85)',
+          color: '#fff', padding: '3px 7px', borderRadius: '4px',
+          fontSize: '12px', fontFamily: 'Arial, sans-serif',
+          display: 'none', zIndex: '10000000',
+          pointerEvents: 'none', whiteSpace: 'nowrap',
+        });
+
+        progress.appendChild(seekHandle);
+        timeline.appendChild(progress);
+
+        const container = document.createElement('div');
+        container.className = 'dg-sb-timeline-container';
+        container.appendChild(timeline);
+        container.appendChild(tooltip);
+
+        this.setupTimelineEvents(container, timeline, progress, seekHandle, tooltip);
+        return container;
+      }
+
+      setupTimelineEvents(container, timeline, progress, seekHandle, tooltip) {
+        const fmt = s => `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`;
+        const getPos = (e) => {
+          const rect = timeline.getBoundingClientRect();
+          return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        };
+        const showTooltip = (pos) => {
+          if (!this.video.duration) return;
+          tooltip.style.display = 'block';
+          tooltip.style.left = `${pos * 100}%`;
+          tooltip.textContent = fmt(this.video.duration * pos);
+        };
+        const hideTooltip = () => { tooltip.style.display = 'none'; };
+
+        container.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          this.isDragging = true;
+          timeline.style.height = '5px';
+          seekHandle.style.transform = 'translateY(-50%) scale(1)';
+          const pos = getPos(e);
+          progress.style.width = `${pos * 100}%`;
+          if (this.video.duration) this.video.currentTime = this.video.duration * pos;
+          showTooltip(pos);
+
+          const onMove = (e) => {
+            const pos = getPos(e);
+            progress.style.width = `${pos * 100}%`;
+            if (this.video.duration) this.video.currentTime = this.video.duration * pos;
+            showTooltip(pos);
+          };
+          const onUp = () => {
+            this.isDragging = false;
+            timeline.style.height = '';
+            seekHandle.style.transform = 'translateY(-50%) scale(0)';
+            hideTooltip();
+            document.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp, true);
+          };
+          document.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp, true);
+        });
+
+        container.addEventListener('mousemove', (e) => { if (!this.isDragging) showTooltip(getPos(e)); });
+        container.addEventListener('mouseleave', () => { if (!this.isDragging) hideTooltip(); });
+
+        this.video.addEventListener('timeupdate', () => {
+          if (!this.isDragging && this.video.duration) {
+            progress.style.width = `${(this.video.currentTime / this.video.duration) * 100}%`;
+          }
+        });
+      }
+    }
+
+    const processedVideos = new WeakSet();
+
+    const addSeekbarToVideo = (videoElement) => {
+      if (processedVideos.has(videoElement)) return;
+      const videoContainer = videoElement.closest('div[class*="x5yr21d"][class*="x1uhb9sk"]');
+      if (!videoContainer) return;
+
+      processedVideos.add(videoElement);
+
+      const seekbar = new Seekbar(videoElement);
+      const controlsWrapper = document.createElement('div');
+      controlsWrapper.className = 'dg-sb-controls-wrapper';
+      Object.assign(controlsWrapper.style, {
+        width: '100%', position: 'absolute',
+        left: '0', right: '0', bottom: '0',
+        zIndex: '9999999', pointerEvents: 'none'
+      });
+
+      controlsWrapper.appendChild(seekbar.container);
+      videoContainer.style.position = 'relative';
+      videoContainer.appendChild(controlsWrapper);
+
+      new MutationObserver(() => {
+        if (!document.contains(videoElement)) controlsWrapper.remove();
+      }).observe(document.body, { childList: true, subtree: true });
+    };
+
+    new MutationObserver((mutations) => {
+      mutations.forEach(mutation => {
+        mutation.addedNodes.forEach(node => {
+          if (node.nodeName === 'VIDEO') addSeekbarToVideo(node);
+          else if (node.querySelectorAll) node.querySelectorAll('video').forEach(addSeekbarToVideo);
+        });
+      });
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'style', 'class'] });
+
+    document.querySelectorAll('video').forEach(addSeekbarToVideo);
+    ShieldBypass.init();
+  }
+
   function initIgAllowSave() {
     (function() {
       function allowSave() {
@@ -625,6 +963,18 @@
       type: 'toggle',
       key: 'devg0d-ig-reels',
       init: initIgReelsDownloader,
+    },
+    {
+      name: icon('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>') + 'ProfileDownloader',
+      type: 'toggle',
+      key: 'devg0d-ig-profile',
+      init: initIgProfileDownloader,
+    },
+    {
+      name: icon('<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>') + 'VideoSeekBar',
+      type: 'toggle',
+      key: 'devg0d-ig-seekbar',
+      init: initIgSeekbar,
     },
     {
       name: icon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>') + 'AllowSave',
