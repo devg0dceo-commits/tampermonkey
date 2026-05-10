@@ -2,7 +2,7 @@
 // @name         DEV/g0d Twitter/X
 // @namespace    FREELOADING
 // @version      1.0
-// @description  DEV/g0d - Twitter/X tools (video downloader)
+// @description  DEV/g0d - Twitter/X tools
 // @author       DEV/g0d
 // @license      MIT
 // @match        *://twitter.com/*
