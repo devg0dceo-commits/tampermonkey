@@ -1,122 +1,240 @@
-// ==UserScript==
-// @name         DEV/g0d Twitter/X
-// @namespace    FREELOADING
-// @version      1.0
-// @description  DEV/g0d - Twitter/X tools (video downloader)
-// @author       DEV/g0d
-// @license      MIT
-// @match        *://twitter.com/*
-// @match        *://x.com/*
-// @icon         https://x.com/favicon.ico
-// @grant        GM_addStyle
-// @grant        GM_xmlhttpRequest
-// @grant        GM_download
-// @connect      api.fxtwitter.com
-// @connect      video.twimg.com
-// @require      https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/addons/x-twitter.js
-// @run-at       document-body
-// ==/UserScript==
+// DEV/g0d - Twitter/X Addon
+// Register plugins via window.DEVg0d_PLUGINS for the main script to render
 
 (function () {
-  'use strict';
-  if (window.self !== window.top) return;
 
-  const getKey = (k) => localStorage.getItem(k) !== 'false';
-  const setKey = (k, v) => localStorage.setItem(k, v ? 'true' : 'false');
-  const L = (localStorage.getItem('devg0d-menu-pos') || 'right') === 'left';
+  // ─── VideoDownloader ──────────────────────────────────────────────────────
+  function initTwitterVideoDownloader() {
+    const SVG_DL   = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+    const SVG_SPIN = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation:dg-tw-spin 1s linear infinite"><circle cx="12" cy="12" r="10"/></svg>`;
+    const SVG_OK   = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`;
+    const SVG_ERR  = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
 
-  GM_addStyle(`
-    #dg-tab {
-      position:fixed; top:50%; transform:translateY(-50%);
-      ${L ? 'left:0' : 'right:0'}; width:18px; height:48px;
-      background:rgba(22,27,34,0.7); border:1px solid rgba(48,54,61,0.5);
-      ${L ? 'border-left:none;border-radius:0 6px 6px 0' : 'border-right:none;border-radius:6px 0 0 6px'};
-      cursor:pointer; z-index:999999999;
-      display:flex; align-items:center; justify-content:center;
-      color:rgba(88,166,255,0.7); font-size:13px; user-select:none;
-      backdrop-filter:blur(8px); transition:all .15s;
+    // Inject styles
+    if (!document.getElementById('dg-tw-style')) {
+      const style = document.createElement('style');
+      style.id = 'dg-tw-style';
+      style.textContent = `
+        @keyframes dg-tw-spin { from { transform:rotate(0deg) } to { transform:rotate(360deg) } }
+        .dg-tw-btn {
+          position:fixed; width:30px; height:30px;
+          display:flex; align-items:center; justify-content:center;
+          background:rgba(0,0,0,0.65); color:white;
+          border-radius:50%; cursor:pointer;
+          z-index:9999999; backdrop-filter:blur(4px);
+          opacity:0.75; pointer-events:auto; border:none; outline:none;
+          transition:opacity .2s ease, background .2s ease, transform .2s ease;
+          box-shadow:0 1px 6px rgba(0,0,0,0.5);
+        }
+        .dg-tw-btn:hover {
+          opacity:1 !important;
+          background:rgba(29,155,240,0.92) !important;
+          transform:scale(1.12);
+        }
+      `;
+      document.head.appendChild(style);
     }
-    #dg-tab:hover { background:rgba(28,33,40,0.85); color:#79c0ff; }
 
-    #dg-popup {
-      position:fixed; top:50%; transform:translateY(-50%);
-      ${L ? 'left:24px' : 'right:24px'};
-      background:rgba(13,17,23,0.75); border:1px solid rgba(48,54,61,0.4);
-      border-radius:10px; padding:5px; min-width:200px;
-      box-shadow:0 8px 32px rgba(0,0,0,.4);
-      backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
-      z-index:999999998; display:none; flex-direction:column;
-      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    // ── Get real video URL from React fiber ──────────────────────────────────
+    function getRealVideoUrlFromFiber(videoEl) {
+      try {
+        const fiberKey = Object.keys(videoEl).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
+        if (!fiberKey) return null;
+        let fiber = videoEl[fiberKey];
+        let depth = 0;
+        while (fiber && depth < 40) {
+          const props = fiber.memoizedProps ?? fiber.pendingProps;
+          if (props) {
+            if (typeof props.src === 'string' && props.src.includes('video.twimg.com')) return props.src;
+            if (props.source?.src?.includes('video.twimg.com')) return props.source.src;
+            if (typeof props.url === 'string' && props.url.includes('video.twimg.com')) return props.url;
+          }
+          fiber = fiber.return;
+          depth++;
+        }
+      } catch (e) {}
+      return null;
     }
-    #dg-popup.show { display:flex; }
 
-    .dg-row {
-      display:flex; align-items:center; gap:8px;
-      padding:8px 10px; border-radius:6px; cursor:default;
-      transition:background .15s;
+    // ── Get Tweet ID ─────────────────────────────────────────────────────────
+    function getTweetId(videoEl) {
+      try {
+        const article = videoEl.closest('article');
+        if (article) {
+          const links = article.querySelectorAll('a[href*="/status/"]');
+          for (const link of links) {
+            const m = link.href.match(/\/status\/(\d+)/);
+            if (m) return m[1];
+          }
+        }
+      } catch (e) {}
+      try {
+        const m = window.location.pathname.match(/\/status\/(\d+)/);
+        if (m) return m[1];
+      } catch (e) {}
+      return null;
     }
-    .dg-row:hover { background:rgba(255,255,255,0.05); }
-    .dg-row.click { cursor:pointer; }
-    .dg-row-name { flex:1; font-size:12px; color:rgba(201,209,217,0.9); }
 
-    .dg-sw { position:relative; width:36px; height:20px; flex-shrink:0; }
-    .dg-sw input { opacity:0; width:0; height:0; }
-    .dg-sw span {
-      position:absolute; inset:0;
-      background:rgba(33,38,45,0.8); border:1px solid rgba(48,54,61,0.6);
-      border-radius:20px; cursor:pointer; transition:.25s;
+    // ── Get video index within tweet (multi-video support) ───────────────────
+    function getVideoIndexInTweet(playerEl) {
+      try {
+        const article = playerEl.closest('article');
+        if (!article) return 0;
+        const allPlayers = Array.from(article.querySelectorAll('[data-testid="videoPlayer"]'));
+        return allPlayers.indexOf(playerEl);
+      } catch (e) {}
+      return 0;
     }
-    .dg-sw span:before {
-      content:''; position:absolute;
-      width:12px; height:12px; left:3px; top:3px;
-      background:#6e7681; border-radius:50%; transition:.25s;
+
+    // ── Fetch video URL via fxtwitter API ────────────────────────────────────
+    function getVideoUrl(tweetId, videoIndex) {
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: `https://api.fxtwitter.com/i/status/${tweetId}`,
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          onload(res) {
+            try {
+              const data = JSON.parse(res.responseText);
+              const media = data?.tweet?.media?.videos ?? data?.tweet?.media?.all ?? [];
+              const videos = media.filter(m => m.type === 'video');
+              if (!videos.length) return reject(new Error('No video in tweet'));
+              const videoItem = videos[videoIndex] ?? videos[0];
+              const variants = (videoItem.variants ?? [])
+                .filter(v => v.content_type === 'video/mp4')
+                .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+              if (!variants.length) return reject(new Error('No mp4 variants'));
+              resolve(variants[0].url);
+            } catch (e) { reject(e); }
+          },
+          onerror(e) { reject(new Error('Network error: ' + e)); }
+        });
+      });
     }
-    .dg-sw input:checked+span { background:#238636; border-color:#2ea043; }
-    .dg-sw input:checked+span:before { transform:translateX(16px); background:#fff; }
-  `);
 
-  const plugins = window.DEVg0d_PLUGINS || [];
+    // ── Download ─────────────────────────────────────────────────────────────
+    function downloadFile(url, filename) {
+      GM_download({
+        url, name: filename, saveAs: false,
+        onerror() { window.open(url, '_blank'); }
+      });
+    }
 
-  const tab = document.createElement('div');
-  tab.id = 'dg-tab';
-  tab.textContent = L ? '›' : '‹';
+    // ── Button state ─────────────────────────────────────────────────────────
+    function setStatus(btn, state) {
+      const map = {
+        idle:    { icon: SVG_DL,   bg: 'rgba(0,0,0,0.65)',     opacity: '0.75', delay: 0    },
+        loading: { icon: SVG_SPIN, bg: 'rgba(29,155,240,0.92)', opacity: '1',    delay: 0    },
+        ok:      { icon: SVG_OK,   bg: 'rgba(76,175,80,0.92)',  opacity: '1',    delay: 2500 },
+        error:   { icon: SVG_ERR,  bg: 'rgba(244,67,54,0.92)', opacity: '1',    delay: 3000 },
+      };
+      const s = map[state];
+      btn.innerHTML = s.icon;
+      btn.style.background = s.bg;
+      btn.style.opacity = s.opacity;
+      if (state === 'loading') btn.dataset.loading = '1';
+      else delete btn.dataset.loading;
+      if (s.delay) setTimeout(() => setStatus(btn, 'idle'), s.delay);
+    }
 
-  const popup = document.createElement('div');
-  popup.id = 'dg-popup';
-  popup.innerHTML = plugins.map((p, i) =>
-    `<div class="dg-row${p.type === 'click' ? ' click' : ''}" data-i="${i}">
-       <span class="dg-row-name">${p.name}</span>
-       ${p.type === 'toggle' ? `<label class="dg-sw" onclick="event.stopPropagation()">
-         <input type="checkbox" data-i="${i}" ${getKey(p.key) ? 'checked' : ''}><span></span>
-       </label>` : ''}
-     </div>`
-  ).join('');
+    // ── Create & attach button ────────────────────────────────────────────────
+    function createButton(playerEl) {
+      const btn = document.createElement('button');
+      btn.className = 'dg-tw-btn';
+      btn.title = 'Download video';
+      btn.innerHTML = SVG_DL;
 
-  document.body.append(tab, popup);
+      const fixedUpdate = () => {
+        if (!document.body.contains(playerEl)) {
+          btn.remove();
+          clearInterval(interval);
+          window.removeEventListener('scroll', fixedUpdate, true);
+          window.removeEventListener('resize', fixedUpdate);
+          return;
+        }
+        const r = playerEl.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          btn.style.display = 'flex';
+          btn.style.top  = (r.top  + 8) + 'px';
+          btn.style.left = (r.left + r.width - 38) + 'px';
+        } else {
+          btn.style.display = 'none';
+        }
+      };
 
-  tab.onclick = (e) => { e.stopPropagation(); popup.classList.toggle('show'); };
-  document.addEventListener('click', (e) => {
-    if (!popup.contains(e.target) && e.target !== tab) popup.classList.remove('show');
-  });
+      document.body.appendChild(btn);
+      fixedUpdate();
+      const interval = setInterval(fixedUpdate, 200);
+      window.addEventListener('scroll', fixedUpdate, true);
+      window.addEventListener('resize', fixedUpdate);
 
-  popup.querySelectorAll('.dg-row.click').forEach(el => {
-    const p = plugins[+el.dataset.i];
-    if (p?.fn) el.onclick = () => p.fn();
-  });
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (btn.dataset.loading) return;
 
-  popup.querySelectorAll('.dg-sw input').forEach(input => {
-    const p = plugins[+input.dataset.i];
-    if (!p) return;
-    input.onchange = (e) => {
-      e.stopPropagation();
-      setKey(p.key, input.checked);
-      alert(`"${p.name}" ${input.checked ? 'enabled' : 'disabled'} — reload to apply.`);
-    };
-  });
+        const videoEl = playerEl.querySelector('video');
+        if (!videoEl) return;
 
-  plugins.forEach(p => {
-    if (p.type === 'toggle' && p.init && getKey(p.key))
-      try { p.init(); } catch (e) { console.error('[DEV/g0d]', e); }
-  });
+        setStatus(btn, 'loading');
+
+        try {
+          // Strategy 1: React fiber (most accurate for multi-video)
+          const fiberUrl = getRealVideoUrlFromFiber(videoEl);
+          if (fiberUrl) {
+            const idMatch = fiberUrl.match(/\/(\d+)\//) ?? [];
+            downloadFile(fiberUrl, `twitter_${idMatch[1] ?? Date.now()}.mp4`);
+            setStatus(btn, 'ok');
+            return;
+          }
+
+          // Strategy 2: fxtwitter API + video index
+          const tweetId = getTweetId(videoEl);
+          if (!tweetId) { setStatus(btn, 'error'); return; }
+          const videoIndex = getVideoIndexInTweet(playerEl);
+          const url = await getVideoUrl(tweetId, videoIndex);
+          downloadFile(url, `twitter_${tweetId}_${videoIndex}.mp4`);
+          setStatus(btn, 'ok');
+        } catch (err) {
+          console.error('[DEV/g0d Twitter]', err);
+          setStatus(btn, 'error');
+        }
+      });
+    }
+
+    // ── Attach to player ──────────────────────────────────────────────────────
+    function attachToPlayer(playerEl) {
+      if (playerEl.dataset.dgTw) return;
+      playerEl.dataset.dgTw = '1';
+      createButton(playerEl);
+    }
+
+    function scan() {
+      document.querySelectorAll('[data-testid="videoPlayer"]').forEach(attachToPlayer);
+    }
+
+    setTimeout(scan, 800);
+    setTimeout(scan, 2000);
+
+    new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType !== 1) continue;
+          if (node.dataset?.testid === 'videoPlayer') setTimeout(() => attachToPlayer(node), 300);
+          node.querySelectorAll?.('[data-testid="videoPlayer"]').forEach(p => setTimeout(() => attachToPlayer(p), 300));
+        }
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+
+  // ─── Register Plugins ─────────────────────────────────────────────────────
+  window.DEVg0d_PLUGINS = [
+    {
+      name: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px"><path d="M15 10l4.553-2.069A1 1 0 0 1 21 8.82v6.36a1 1 0 0 1-1.447.89L15 14M3 8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>VideoDownloader',
+      type: 'toggle',
+      key: 'devg0d-tw-video',
+      init: initTwitterVideoDownloader,
+    },
+  ];
 
 })();
