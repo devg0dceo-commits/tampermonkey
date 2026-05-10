@@ -226,6 +226,42 @@
     }).observe(document.body, { childList: true, subtree: true });
   }
 
+  // ─── ContentWarningRemover ────────────────────────────────────────────────
+  function initContentWarningRemover() {
+    const waitValue = (func, timeout = 10000) =>
+      new Promise((resolve, reject) => {
+        const val = func();
+        if (val) { resolve(val); return; }
+        const timeoutTimer = setTimeout(() => { clearInterval(timer); reject(); }, timeout);
+        const timer = setInterval(() => {
+          const val = func();
+          if (val) { clearTimeout(timeoutTimer); clearInterval(timer); resolve(val); }
+        }, 500);
+      });
+
+    const findBlurCssRule = () => {
+      for (const ss of document.styleSheets) {
+        try {
+          for (const rule of ss.cssRules) {
+            if (!(rule instanceof CSSStyleRule)) continue;
+            if (rule.style.filter === 'blur(30px)') return rule;
+          }
+        } catch (e) {}
+      }
+    };
+
+    waitValue(findBlurCssRule).then(rule => {
+      if (!rule) { console.warn('[DEV/g0d] trcw: css rule not found'); return; }
+      const style = document.createElement('style');
+      style.textContent = `
+        ${rule.selectorText} { filter: none !important; }
+        ${rule.selectorText} + div { display: none !important; }
+      `;
+      document.head.appendChild(style);
+      console.log('[DEV/g0d] trcw: done', rule.selectorText);
+    }).catch(() => console.warn('[DEV/g0d] trcw: timed out'));
+  }
+
   // ─── Register Plugins ─────────────────────────────────────────────────────
   window.DEVg0d_PLUGINS = [
     {
@@ -233,6 +269,12 @@
       type: 'toggle',
       key: 'devg0d-tw-video',
       init: initTwitterVideoDownloader,
+    },
+    {
+      name: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px"><rect x="3" y="3" width="18" height="18" rx="2"/><text x="12" y="15.5" text-anchor="middle" font-size="8" font-weight="bold" fill="#8b949e" stroke="none" font-family="Arial,sans-serif">18+</text></svg>ContentWarning',
+      type: 'toggle',
+      key: 'devg0d-tw-cw',
+      init: initContentWarningRemover,
     },
   ];
 
