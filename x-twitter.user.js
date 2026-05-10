@@ -112,7 +112,7 @@
     input.onchange = (e) => {
       e.stopPropagation();
       setKey(p.key, input.checked);
-      alert(`"${p.name}" ${input.checked ? 'enabled' : 'disabled'} — reload to apply.`);
+      alert(`"${p.label ?? p.key}" ${input.checked ? 'enabled' : 'disabled'} — reload to apply.`);
     };
   });
 
