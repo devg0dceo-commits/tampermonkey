@@ -272,8 +272,8 @@
       init: initTwitterVideoDownloader,
     },
     {
-      name: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px"><rect x="3" y="3" width="18" height="18" rx="2"/><text x="12" y="15.5" text-anchor="middle" font-size="8" font-weight="bold" fill="#8b949e" stroke="none" font-family="Arial,sans-serif">18+</text></svg>ContentWarning',
-      label: 'DisableWarning',
+      name: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px"><rect x="3" y="3" width="18" height="18" rx="2"/><text x="12" y="15.5" text-anchor="middle" font-size="8" font-weight="bold" fill="#8b949e" stroke="none" font-family="Arial,sans-serif">18+</text></svg>DisableWarning',
+      label: 'ContentWarning',
       type: 'toggle',
       key: 'devg0d-tw-cw',
       init: initContentWarningRemover,
