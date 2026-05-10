@@ -1,5 +1,4 @@
 // DEV/g0d - Twitter/X Addon
-// Register plugins via window.DEVg0d_PLUGINS for the main script to render
 
 (function () {
 
@@ -156,7 +155,7 @@
         if (r.width > 0 && r.height > 0) {
           btn.style.display = 'flex';
           btn.style.top  = (r.top  + 8) + 'px';
-          btn.style.left = (r.left + r.width - 38) + 'px';
+          btn.style.left = (r.left + 8) + 'px';
         } else {
           btn.style.display = 'none';
         }
