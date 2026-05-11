@@ -258,6 +258,7 @@
           this.createButtonWithPolling();
         } else if (btn) {
           btn.remove();
+          document.getElementById('dg-story-open-btn')?.remove();
         }
       }
 
@@ -265,7 +266,7 @@
         if (document.getElementById('dg-story-dl-styles')) return;
         const style = document.createElement('style');
         style.id = 'dg-story-dl-styles';
-        style.textContent = `#dg-story-dl-btn{border:none;background:transparent;color:white;cursor:pointer;z-index:9999;width:48px;height:48px;padding:0;margin-top:-8px;display:flex;align-items:center;justify-content:center;transition:opacity .2s ease}#dg-story-dl-btn:hover{opacity:.7}#dg-story-dl-btn svg{width:24px;height:24px}`;
+        style.textContent = `#dg-story-dl-btn,#dg-story-open-btn{border:none;background:transparent;color:white;cursor:pointer;z-index:9999;width:48px;height:48px;padding:0;margin-top:-8px;display:flex;align-items:center;justify-content:center;transition:opacity .2s ease}#dg-story-dl-btn:hover,#dg-story-open-btn:hover{opacity:.7}#dg-story-dl-btn svg,#dg-story-open-btn svg{width:24px;height:24px}`;
         document.head.appendChild(style);
       }
 
@@ -280,11 +281,26 @@
         if (document.getElementById('dg-story-dl-btn')) return null;
         const topBar = Array.from(document.querySelectorAll('div.xtotuo0')).find(b => b instanceof HTMLElement && b.offsetHeight > 0);
         if (!topBar) return null;
+
         const btn = document.createElement('button');
         btn.id = 'dg-story-dl-btn';
         btn.title = 'Download Story';
         btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
         btn.addEventListener('click', () => this.handleDownload());
+
+        const openBtn = document.createElement('button');
+        openBtn.id = 'dg-story-open-btn';
+        openBtn.className = 'igStoryBtn';
+        openBtn.title = 'Open in new tab';
+        openBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
+        openBtn.addEventListener('click', async () => {
+          try {
+            await this.detectMedia();
+            if (this.mediaUrl) window.open(this.mediaUrl, '_blank');
+          } catch (e) { console.error('[DEV/g0d] Story open tab failed:', e); }
+        });
+
+        topBar.appendChild(openBtn);
         topBar.appendChild(btn);
         return btn;
       }
