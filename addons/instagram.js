@@ -4,7 +4,7 @@
 
   // ─── Shared helpers ───────────────────────────────────────────────────────
 
-  // ShieldBypass
+  // ShieldBypass: intercept clicks before IG overlay (same as Instagram_Video_Controls)
   ;['mousedown','mouseup','click'].forEach(type => {
     window.addEventListener(type, (e) => {
       if (!e.isTrusted) return;
@@ -61,6 +61,7 @@
       return idx;
     }
 
+    // exact same as ig-story-test.user.js
     function getVideoRealUrl(video) {
       const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
       if (!fiberKey) return null;
@@ -239,6 +240,7 @@
     const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
     const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
 
+    // exact same as ig-story-test.user.js
     function fetchMediaByShortcode(shortcode) {
       return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
@@ -271,6 +273,7 @@
       });
     }
 
+    // exact same React fiber walk as ig-story-test.user.js
     function getVideoRealUrl(video) {
       const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
       if (!fiberKey) return null;
@@ -321,7 +324,8 @@
       .dg-reel-wrap button svg{width:16px;height:16px}
     `;
     document.head.appendChild(style);
-    
+
+    // exact same as ig-story-test.user.js injectReelButtons
     function injectReelButtons(container) {
       if (container.querySelector('.dg-reel-wrap')) return;
 
@@ -526,7 +530,7 @@
   // ─── 5. Video SeekBar ─────────────────────────────────────────────────────
   function initIgSeekbar() {
 
-    // ShieldBypass
+    // ShieldBypass: exact copy from ig-seekbar.user.js
     const ShieldBypass = {
       init() {
         ['mousedown', 'mouseup', 'click'].forEach(eventType => {
@@ -835,16 +839,59 @@
       return null;
     }
 
+    // Get current carousel index from the dot indicators or aria-hidden slides
+    function getCarouselIndex(article) {
+      // Method 1: dot indicators — active dot has different style/class
+      const dots = article.querySelectorAll('div[role="listitem"] > div, div[class*="carousel"] span[class*="dot"], ul[class*="carousel"] li');
+      if (dots.length > 1) {
+        for (let i = 0; i < dots.length; i++) {
+          const d = dots[i];
+          // Active dot is usually filled/white vs transparent
+          const bg = getComputedStyle(d).backgroundColor;
+          if (bg && !bg.includes('0, 0, 0, 0') && !bg.includes('rgba(0') && bg !== 'transparent') {
+            return i;
+          }
+        }
+      }
+
+      // Method 2: look for the visible (non-hidden) slide in a carousel list
+      const slides = article.querySelectorAll('ul[class] > li');
+      if (slides.length > 1) {
+        for (let i = 0; i < slides.length; i++) {
+          const s = slides[i];
+          const rect = s.getBoundingClientRect();
+          const parentRect = s.parentElement.getBoundingClientRect();
+          // The visible slide overlaps with the parent center
+          if (rect.left >= parentRect.left - 10 && rect.left <= parentRect.left + 10) {
+            return i;
+          }
+        }
+      }
+
+      // Method 3: aria-hidden on sibling slides
+      const allSlides = article.querySelectorAll('[aria-hidden]');
+      const visibleSlides = article.querySelectorAll('[aria-hidden="false"]');
+      if (visibleSlides.length === 1 && allSlides.length > 1) {
+        const all = Array.from(article.querySelectorAll('li'));
+        const visible = visibleSlides[0].closest('li');
+        if (visible) return all.indexOf(visible);
+      }
+
+      return 0;
+    }
+
     async function downloadFeedMedia(src, article) {
       const shortcode = getShortcode(article);
+      const idx = getCarouselIndex(article);
+
       if (shortcode) {
         try {
           let media = await fetchMediaByShortcode(shortcode).catch(() => null);
           if (media) {
-            if (media.video_url) { triggerDownload(media.video_url, 'mp4'); return; }
+            if (media.video_url && idx === 0) { triggerDownload(media.video_url, 'mp4'); return; }
             if (media.edge_sidecar_to_children) {
               const items = media.edge_sidecar_to_children.edges.map(e => e.node);
-              const item = items[0];
+              const item = items[idx] ?? items[0];
               if (item.video_url) { triggerDownload(item.video_url, 'mp4'); return; }
               if (item.display_url) { triggerDownload(item.display_url, 'jpg'); return; }
             }
@@ -853,6 +900,12 @@
           }
           const item = await fetchMediaByQueryID(shortcode).catch(() => null);
           if (item) {
+            // carousel_media contains all slides
+            if (item.carousel_media?.length) {
+              const slide = item.carousel_media[idx] ?? item.carousel_media[0];
+              if (slide.video_versions?.length) { triggerDownload(slide.video_versions[0].url, 'mp4'); return; }
+              if (slide.image_versions2?.candidates?.length) { triggerDownload(slide.image_versions2.candidates[0].url, 'jpg'); return; }
+            }
             if (item.video_versions?.length) { triggerDownload(item.video_versions[0].url, 'mp4'); return; }
             if (item.image_versions2?.candidates?.length) { triggerDownload(item.image_versions2.candidates[0].url, 'jpg'); return; }
           }
@@ -866,16 +919,22 @@
 
     async function openFeedMedia(article) {
       const shortcode = getShortcode(article);
+      const idx = getCarouselIndex(article);
       if (!shortcode) return;
       try {
         let media = await fetchMediaByShortcode(shortcode).catch(() => null);
+        if (media?.edge_sidecar_to_children) {
+          const items = media.edge_sidecar_to_children.edges.map(e => e.node);
+          const item = items[idx] ?? items[0];
+          window.open(item?.video_url || item?.display_url, '_blank'); return;
+        }
         if (media?.video_url) { window.open(media.video_url, '_blank'); return; }
         if (media?.display_url) { window.open(media.display_url, '_blank'); return; }
-        if (media?.edge_sidecar_to_children) {
-          const node = media.edge_sidecar_to_children.edges[0]?.node;
-          window.open(node?.video_url || node?.display_url, '_blank'); return;
-        }
         const item = await fetchMediaByQueryID(shortcode).catch(() => null);
+        if (item?.carousel_media?.length) {
+          const slide = item.carousel_media[idx] ?? item.carousel_media[0];
+          window.open(slide?.video_versions?.[0]?.url || slide?.image_versions2?.candidates?.[0]?.url, '_blank'); return;
+        }
         if (item?.video_versions?.[0]?.url) { window.open(item.video_versions[0].url, '_blank'); return; }
         if (item?.image_versions2?.candidates?.[0]?.url) { window.open(item.image_versions2.candidates[0].url, '_blank'); return; }
       } catch(e) { console.error('[DEV/g0d] openFeedMedia error:', e); }
