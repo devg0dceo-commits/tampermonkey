@@ -17,6 +17,8 @@
 // @connect      *.vk-cdn.net
 // @connect      *.vkuser.net
 // @connect      *
+// @downloadURL  https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/vk.user.js
+// @updateURL    https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/vk.user.js
 // @require      https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/addons/vk.js
 // @run-at       document-body
 // ==/UserScript==
