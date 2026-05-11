@@ -237,8 +237,8 @@
   // ─── 3. Reels Downloader ──────────────────────────────────────────────────
   function initIgReelsDownloader() {
 
-    const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
-    const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
+    const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+    const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
 
     // exact same as ig-story-test.user.js
     function fetchMediaByShortcode(shortcode) {
@@ -319,9 +319,19 @@
     const style = document.createElement('style');
     style.textContent = `
       .dg-reel-wrap{position:absolute;right:40px;top:15px;display:flex;flex-direction:column;gap:6px;z-index:9999;line-height:0}
-      .dg-reel-wrap button{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.92);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#1a1a1a;box-shadow:0 1px 6px rgba(0,0,0,.25);transition:transform .15s,background .15s;padding:0}
-      .dg-reel-wrap button:hover{background:#fff;transform:scale(1.1)}
-      .dg-reel-wrap button svg{width:16px;height:16px}
+      .dg-reel-wrap button{
+        width:32px;height:32px;border-radius:8px;
+        background:rgba(0,0,0,0.18);
+        border:none;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;
+        color:white;
+        backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+        box-shadow:0 1px 8px rgba(0,0,0,0.18);
+        transition:transform .15s,background .15s;padding:0;
+        opacity:0.85;
+      }
+      .dg-reel-wrap button:hover{background:rgba(0,0,0,0.32);transform:scale(1.1);opacity:1}
+      .dg-reel-wrap button svg{width:17px;height:17px;fill:white;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4))}
     `;
     document.head.appendChild(style);
 
@@ -956,15 +966,25 @@
       } catch(e) { console.error('[DEV/g0d] openFeedMedia error:', e); }
     }
 
-    const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
-    const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
+    const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+    const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
 
     const style = document.createElement('style');
     style.textContent = `
-      .dg-btn-wrap{position:absolute;top:12px;right:12px;display:flex;flex-flow:row-reverse;gap:6px;z-index:9999;line-height:0}
-      .dg-btn-wrap button{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,0.92);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#1a1a1a;box-shadow:0 1px 6px rgba(0,0,0,.25);transition:transform .15s,background .15s;padding:0}
-      .dg-btn-wrap button:hover{background:#fff;transform:scale(1.1)}
-      .dg-btn-wrap button svg{width:16px;height:16px}
+      .dg-btn-wrap{position:absolute;top:12px;right:12px;display:flex;flex-flow:row-reverse;gap:4px;z-index:9999;line-height:0}
+      .dg-btn-wrap button{
+        width:32px;height:32px;border-radius:8px;
+        background:rgba(0,0,0,0.18);
+        border:none;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;
+        color:white;
+        backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+        box-shadow:0 1px 8px rgba(0,0,0,0.18);
+        transition:transform .15s,background .15s;padding:0;
+        opacity:0.85;
+      }
+      .dg-btn-wrap button:hover{background:rgba(0,0,0,0.32);transform:scale(1.1);opacity:1}
+      .dg-btn-wrap button svg{width:17px;height:17px;fill:white;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.4))}
     `;
     document.head.appendChild(style);
 
