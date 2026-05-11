@@ -125,22 +125,27 @@
 
     function createDownloadIcon(videoWrapper) {
       const svgDL   = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+      const svgOpen = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
       const svgSpin = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation:spin 1s linear infinite"><circle cx="12" cy="12" r="10"/></svg>`;
       const svgOK   = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`;
       const svgErr  = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
 
-      const icon = document.createElement('div');
-      icon.className = 'fb-dl-icon';
-      icon.innerHTML = svgDL;
-      icon.style.cssText = 'position:fixed;width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);color:white;border-radius:50%;cursor:pointer;transition:all .2s ease;z-index:9999999;backdrop-filter:blur(4px);opacity:.6;pointer-events:auto';
+      const btnStyle = 'width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:transparent;color:white;border:none;border-radius:50%;cursor:pointer;transition:opacity .2s ease;pointer-events:auto;padding:0;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.6))';
 
-      icon.addEventListener('mouseenter', () => { icon.style.opacity = '1'; icon.style.background = 'rgba(0,0,0,.8)'; icon.style.transform = 'scale(1.1)'; });
-      icon.addEventListener('mouseleave', () => { if (!icon.classList.contains('downloading')) { icon.style.opacity = '.6'; icon.style.background = 'rgba(0,0,0,.6)'; icon.style.transform = 'scale(1)'; } });
+      // Download button
+      const dlIcon = document.createElement('button');
+      dlIcon.className = 'fb-dl-icon';
+      dlIcon.innerHTML = svgDL;
+      dlIcon.style.cssText = btnStyle;
+      dlIcon.title = 'Download video';
 
-      icon.addEventListener('click', async (e) => {
+      dlIcon.addEventListener('mouseenter', () => { dlIcon.style.opacity = '.7'; });
+      dlIcon.addEventListener('mouseleave', () => { if (!dlIcon.classList.contains('downloading')) dlIcon.style.opacity = '1'; });
+
+      dlIcon.addEventListener('click', async (e) => {
         e.preventDefault(); e.stopPropagation();
-        if (icon.classList.contains('downloading')) return;
-        icon.classList.add('downloading'); icon.innerHTML = svgSpin; icon.style.background = 'rgba(66,165,245,.9)'; icon.style.opacity = '1';
+        if (dlIcon.classList.contains('downloading')) return;
+        dlIcon.classList.add('downloading'); dlIcon.innerHTML = svgSpin;
         try {
           const video = videoWrapper.querySelector('video');
           if (!video) throw new Error('Video not found');
@@ -148,14 +153,44 @@
           if (!videoId) throw new Error('Could not get video ID');
           const videoUrl = await getVideoUrl(videoId);
           await downloadURL(videoUrl, `fb_video_${videoId}.mp4`);
-          icon.innerHTML = svgOK; icon.style.background = 'rgba(76,175,80,.9)';
-          setTimeout(() => { icon.innerHTML = svgDL; icon.style.background = 'rgba(0,0,0,.6)'; icon.style.opacity = '.6'; icon.classList.remove('downloading'); }, 2000);
+          dlIcon.innerHTML = svgOK;
+          setTimeout(() => { dlIcon.innerHTML = svgDL; dlIcon.classList.remove('downloading'); dlIcon.style.opacity = '1'; }, 2000);
         } catch (err) {
-          icon.innerHTML = svgErr; icon.style.background = 'rgba(244,67,54,.9)';
-          setTimeout(() => { icon.innerHTML = svgDL; icon.style.background = 'rgba(0,0,0,.6)'; icon.style.opacity = '.6'; icon.classList.remove('downloading'); }, 3000);
+          dlIcon.innerHTML = svgErr;
+          setTimeout(() => { dlIcon.innerHTML = svgDL; dlIcon.classList.remove('downloading'); dlIcon.style.opacity = '1'; }, 3000);
         }
       });
-      return icon;
+
+      // Open new tab button
+      const openIcon = document.createElement('button');
+      openIcon.className = 'fb-open-icon';
+      openIcon.innerHTML = svgOpen;
+      openIcon.style.cssText = btnStyle;
+      openIcon.title = 'Open in new tab';
+
+      openIcon.addEventListener('mouseenter', () => { openIcon.style.opacity = '.7'; });
+      openIcon.addEventListener('mouseleave', () => { openIcon.style.opacity = '1'; });
+
+      openIcon.addEventListener('click', async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        try {
+          const video = videoWrapper.querySelector('video');
+          if (!video) return;
+          const videoId = getVideoIdFromVideoElement(video);
+          if (!videoId) return;
+          const videoUrl = await getVideoUrl(videoId);
+          window.open(videoUrl, '_blank');
+        } catch (err) { console.error('[DEV/g0d] FB open tab failed:', err); }
+      });
+
+      // Wrap both buttons in a container
+      const wrap = document.createElement('div');
+      wrap.className = 'fb-btn-wrap';
+      wrap.style.cssText = 'position:fixed;display:flex;gap:2px;align-items:center;z-index:9999999;pointer-events:auto';
+      wrap.appendChild(openIcon);
+      wrap.appendChild(dlIcon);
+
+      return wrap;
     }
 
     function addIconToVideo(videoElement) {
@@ -166,15 +201,19 @@
       if (videoWrapper.getAttribute('data-dg-dl')) return;
       videoWrapper.setAttribute('data-dg-dl', '1');
 
-      const icon = createDownloadIcon(videoWrapper);
+      const wrap = createDownloadIcon(videoWrapper);
       const updatePos = () => {
-        if (!document.body.contains(videoWrapper)) { icon.remove(); clearInterval(interval); return; }
+        if (!document.body.contains(videoWrapper)) { wrap.remove(); clearInterval(interval); return; }
         const r = videoWrapper.getBoundingClientRect();
-        icon.style.top  = (r.top + 8) + 'px';
-        icon.style.left = (r.right - 40) + 'px';
-        icon.style.display = (r.width > 0 && r.height > 0) ? 'flex' : 'none';
+        if (r.width > 0 && r.height > 0) {
+          wrap.style.display = 'flex';
+          wrap.style.top  = (r.top + 8) + 'px';
+          wrap.style.left = (r.right - 76) + 'px';
+        } else {
+          wrap.style.display = 'none';
+        }
       };
-      document.body.appendChild(icon);
+      document.body.appendChild(wrap);
       updatePos();
       const interval = setInterval(updatePos, 100);
     }
