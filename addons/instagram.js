@@ -839,42 +839,58 @@
       return null;
     }
 
-    // Get current carousel index from the dot indicators or aria-hidden slides
+    // Get current carousel index — ported from ighelper's getVisibleNodeIndex
     function getCarouselIndex(article) {
-      // Method 1: dot indicators — active dot has different style/class
-      const dots = article.querySelectorAll('div[role="listitem"] > div, div[class*="carousel"] span[class*="dot"], ul[class*="carousel"] li');
-      if (dots.length > 1) {
-        for (let i = 0; i < dots.length; i++) {
-          const d = dots[i];
-          // Active dot is usually filled/white vs transparent
-          const bg = getComputedStyle(d).backgroundColor;
-          if (bg && !bg.includes('0, 0, 0, 0') && !bg.includes('rgba(0') && bg !== 'transparent') {
-            return i;
+      // If no "back" button exists, we're on the first slide
+      const hasBackButton = article.querySelector('button[aria-label*="Go back"], button._afxv, button[class*="back"]') !== null
+        || (() => {
+          // Check for any button that's a "previous" nav (left arrow area)
+          const btns = article.querySelectorAll('button');
+          for (const b of btns) {
+            const rect = b.getBoundingClientRect();
+            const articleRect = article.getBoundingClientRect();
+            // Button on the left side of the article = back button
+            if (rect.width > 0 && rect.left < articleRect.left + articleRect.width * 0.2) return true;
           }
+          return false;
+        })();
+
+      if (!hasBackButton) return 0;
+
+      // Find the carousel viewport: parent of parent of ul[class]
+      const ul = article.querySelector('ul[class]');
+      if (!ul) return 0;
+
+      const viewport = ul.parentElement?.parentElement;
+      if (!viewport) return 0;
+
+      const viewportRect = viewport.getBoundingClientRect();
+      const itemWidth = viewportRect.width;
+      if (itemWidth === 0) return 0;
+
+      // Find the <li> whose right edge is closest to viewport's right edge
+      const slides = article.querySelectorAll('li[class]');
+      let closestSlide = null;
+      let minDistance = Infinity;
+
+      for (const slide of slides) {
+        const rect = slide.getBoundingClientRect();
+        if (rect.width === 0) continue;
+        const distance = Math.abs(rect.right - viewportRect.right);
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestSlide = slide;
         }
       }
 
-      // Method 2: look for the visible (non-hidden) slide in a carousel list
-      const slides = article.querySelectorAll('ul[class] > li');
-      if (slides.length > 1) {
-        for (let i = 0; i < slides.length; i++) {
-          const s = slides[i];
-          const rect = s.getBoundingClientRect();
-          const parentRect = s.parentElement.getBoundingClientRect();
-          // The visible slide overlaps with the parent center
-          if (rect.left >= parentRect.left - 10 && rect.left <= parentRect.left + 10) {
-            return i;
-          }
-        }
-      }
+      if (!closestSlide) return 0;
 
-      // Method 3: aria-hidden on sibling slides
-      const allSlides = article.querySelectorAll('[aria-hidden]');
-      const visibleSlides = article.querySelectorAll('[aria-hidden="false"]');
-      if (visibleSlides.length === 1 && allSlides.length > 1) {
-        const all = Array.from(article.querySelectorAll('li'));
-        const visible = visibleSlides[0].closest('li');
-        if (visible) return all.indexOf(visible);
+      // Extract translateX from style to calculate index
+      const style = closestSlide.getAttribute('style') || '';
+      const match = style.match(/translateX\(([^p]+)px\)/);
+      if (match) {
+        const totalOffset = parseFloat(match[1]);
+        return Math.round(totalOffset / itemWidth);
       }
 
       return 0;
