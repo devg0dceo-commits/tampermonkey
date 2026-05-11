@@ -267,7 +267,7 @@
         if (document.getElementById('dg-story-dl-styles')) return;
         const style = document.createElement('style');
         style.id = 'dg-story-dl-styles';
-        style.textContent = `#dg-story-dl-btn,#dg-story-open-btn{border:none;background:transparent;color:white;cursor:pointer;z-index:9999;width:28px;height:28px;padding:0;margin-top:4px;display:flex;align-items:center;justify-content:center;transition:opacity .2s ease}#dg-story-dl-btn:hover,#dg-story-open-btn:hover{opacity:.7}#dg-story-dl-btn svg,#dg-story-open-btn svg{width:22px;height:22px}`;
+        style.textContent = `#dg-story-dl-btn,#dg-story-open-btn{border:none;background:transparent;color:white;cursor:pointer;z-index:9999;width:28px;height:28px;padding:0;margin:0;align-self:center;display:flex;align-items:center;justify-content:center;transition:opacity .2s ease}#dg-story-dl-btn:hover,#dg-story-open-btn:hover{opacity:.7}#dg-story-dl-btn svg,#dg-story-open-btn svg{width:22px;height:22px}`;
         document.head.appendChild(style);
       }
 
