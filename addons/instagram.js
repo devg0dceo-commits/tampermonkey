@@ -432,8 +432,58 @@
       return location.pathname.replace(/(reels|tagged|saved)\/?$/i, '').split('/').filter(s => s).at(-1);
     }
 
+    async function fetchUserId(username) {
+      // Primary: topsearch (same as ighelper)
+      try {
+        const res = await new Promise((resolve, reject) => {
+          GM_xmlhttpRequest({
+            method: 'GET',
+            url: `https://www.instagram.com/web/search/topsearch/?query=${username}`,
+            onload: r => { try { resolve(JSON.parse(r.responseText)); } catch(e) { reject(e); } },
+            onerror: reject,
+          });
+        });
+        const match = res?.users?.find(u => u.user?.username?.toLowerCase() === username.toLowerCase());
+        if (match?.user?.pk || match?.user?.id) return match.user.pk || match.user.id;
+      } catch(e) { /* fall through */ }
+
+      // Fallback: web_profile_info
+      const res = await new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: `https://i.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
+          headers: { 'X-IG-App-ID': getAppID() },
+          onload: r => { try { resolve(JSON.parse(r.responseText)); } catch(e) { reject(e); } },
+          onerror: reject,
+        });
+      });
+      const user = res?.data?.user;
+      if (!user) throw new Error('no user id');
+      return user.pk || user.id;
+    }
+
     async function downloadProfilePic(username) {
       try {
+        const userId = await fetchUserId(username);
+
+        // HD via www.instagram.com (not i.instagram.com — matches ighelper)
+        try {
+          const infoRes = await new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+              method: 'GET',
+              url: `https://www.instagram.com/api/v1/users/${userId}/info/`,
+              headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Pixel 7 XL)Build/RP1A.20845.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/5.0 Chrome/117.0.5938.60 Mobile Safari/537.36 Instagram 307.0.0.34.111' },
+              onload: r => { try { resolve(JSON.parse(r.responseText)); } catch(e) { reject(e); } },
+              onerror: reject,
+            });
+          });
+          if (infoRes?.status === 'ok') {
+            const hdUrl = infoRes?.user?.hd_profile_pic_url_info?.url;
+            if (hdUrl) { triggerDownload(hdUrl, 'jpg'); return; }
+          }
+        } catch(e) { /* fall through to fallback */ }
+
+        // Fallback: profile_pic_url from web_profile_info
         const profileRes = await new Promise((resolve, reject) => {
           GM_xmlhttpRequest({
             method: 'GET',
@@ -443,24 +493,10 @@
             onerror: reject,
           });
         });
-
-        const userId = profileRes?.data?.user?.pk || profileRes?.data?.user?.id;
-        if (!userId) throw new Error('no user id');
-
-        const infoRes = await new Promise((resolve, reject) => {
-          GM_xmlhttpRequest({
-            method: 'GET',
-            url: `https://i.instagram.com/api/v1/users/${userId}/info/`,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Pixel 7 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36 Instagram 307.0.0.34.111' },
-            onload: r => { try { resolve(JSON.parse(r.responseText)); } catch(e) { reject(e); } },
-            onerror: reject,
-          });
-        });
-
-        const hdUrl = infoRes?.user?.hd_profile_pic_url_info?.url;
-        if (hdUrl) { triggerDownload(hdUrl, 'jpg'); return; }
         const fallbackUrl = profileRes?.data?.user?.profile_pic_url;
-        if (fallbackUrl) { triggerDownload(fallbackUrl, 'jpg'); }
+        if (fallbackUrl) { triggerDownload(fallbackUrl, 'jpg'); return; }
+
+        console.warn('[DEV/g0d] Could not get profile picture URL');
       } catch(e) {
         console.error('[DEV/g0d] profile pic download error:', e);
       }
