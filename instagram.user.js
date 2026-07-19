@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DEV/g0d Instagram
 // @namespace    FREELOADING
-// @version      2.0
+// @version      2.1
 // @description  DEV/g0d - Instagram tools
 // @author       DEV/g0d
 // @license      MIT
