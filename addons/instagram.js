@@ -93,10 +93,15 @@
       return null;
     }
 
-    // หา video element ในสตอรี่ (เฉพาะ video — ไม่สนใจรูป)
+    // ── PATCH: หา video ของ story แบบแม่นยำ ───────────────────────────
+    // กรอง: มองเห็น + แนวตั้ง (h > w) → กัน feed video
     function findStoryVideo() {
-      return document.querySelector('body > div section video[playsinline]')
-          || document.querySelector('video[playsinline]');
+      const videos = Array.from(document.querySelectorAll('video'))
+        .filter(v => v.offsetWidth > 0 && v.offsetHeight > 0)   // มองเห็น
+        .filter(v => v.offsetHeight > v.offsetWidth);           // แนวตั้ง (story)
+      if (!videos.length) return null;
+      videos.sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight));
+      return videos[0];
     }
 
     function detectCurrentMedia() {
@@ -385,7 +390,6 @@
     }
 
     async function fetchUserId(username) {
-      // Primary: topsearch (same as ighelper)
       try {
         const res = await new Promise((resolve, reject) => {
           GM_xmlhttpRequest({
@@ -399,7 +403,6 @@
         if (match?.user?.pk || match?.user?.id) return match.user.pk || match.user.id;
       } catch(e) { /* fall through */ }
 
-      // Fallback: web_profile_info
       const res = await new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
           method: 'GET',
@@ -418,7 +421,6 @@
       try {
         const userId = await fetchUserId(username);
 
-        // HD via www.instagram.com (not i.instagram.com — matches ighelper)
         try {
           const infoRes = await new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
@@ -435,7 +437,6 @@
           }
         } catch(e) { /* fall through to fallback */ }
 
-        // Fallback: profile_pic_url from web_profile_info
         const profileRes = await new Promise((resolve, reject) => {
           GM_xmlhttpRequest({
             method: 'GET',
@@ -525,7 +526,6 @@
   // ─── 5. Video SeekBar ─────────────────────────────────────────────────────
   function initIgSeekbar() {
 
-    // ShieldBypass: exact copy from ig-seekbar.user.js
     const ShieldBypass = {
       init() {
         ['mousedown', 'mouseup', 'click'].forEach(eventType => {
@@ -834,17 +834,13 @@
       return null;
     }
 
-    // Get current carousel index — ported from ighelper's getVisibleNodeIndex
     function getCarouselIndex(article) {
-      // If no "back" button exists, we're on the first slide
       const hasBackButton = article.querySelector('button[aria-label*="Go back"], button._afxv, button[class*="back"]') !== null
         || (() => {
-          // Check for any button that's a "previous" nav (left arrow area)
           const btns = article.querySelectorAll('button');
           for (const b of btns) {
             const rect = b.getBoundingClientRect();
             const articleRect = article.getBoundingClientRect();
-            // Button on the left side of the article = back button
             if (rect.width > 0 && rect.left < articleRect.left + articleRect.width * 0.2) return true;
           }
           return false;
@@ -852,7 +848,6 @@
 
       if (!hasBackButton) return 0;
 
-      // Find the carousel viewport: parent of parent of ul[class]
       const ul = article.querySelector('ul[class]');
       if (!ul) return 0;
 
@@ -863,7 +858,6 @@
       const itemWidth = viewportRect.width;
       if (itemWidth === 0) return 0;
 
-      // Find the <li> whose right edge is closest to viewport's right edge
       const slides = article.querySelectorAll('li[class]');
       let closestSlide = null;
       let minDistance = Infinity;
@@ -880,7 +874,6 @@
 
       if (!closestSlide) return 0;
 
-      // Extract translateX from style to calculate index
       const style = closestSlide.getAttribute('style') || '';
       const match = style.match(/translateX\(([^p]+)px\)/);
       if (match) {
@@ -911,7 +904,6 @@
           }
           const item = await fetchMediaByQueryID(shortcode).catch(() => null);
           if (item) {
-            // carousel_media contains all slides
             if (item.carousel_media?.length) {
               const slide = item.carousel_media[idx] ?? item.carousel_media[0];
               if (slide.video_versions?.length) { triggerDownload(slide.video_versions[0].url, 'mp4'); return; }
@@ -1027,7 +1019,6 @@
     win.XMLHttpRequest.prototype.send = function () {
       const body = arguments[0];
       if (typeof body === 'string' && body.includes('viewSeenAt')) {
-        // Block the "seen" notification — do not call original
         return;
       }
       originalSend.apply(this, arguments);
