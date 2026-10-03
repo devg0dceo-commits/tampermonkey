@@ -5,8 +5,8 @@
   'use strict';
 
   // ═══════════════════════════════════════════════════════════════════════
-  //  GLOBAL: NETWORK HOOK
-  //  ติดตั้งทันที (document-start) เพื่อดัก URL .mp4 ที่ FB โหลด
+  //  GLOBAL: NETWORK HOOK (ติดตั้งทันทีที่ document-start)
+  //  ดัก URL .mp4/.jpg ที่ FB โหลดผ่าน fetch/XHR ไว้ให้ StorySaver ใช้
   // ═══════════════════════════════════════════════════════════════════════
   const __dgCaptured = {
     videos: [],
@@ -15,7 +15,7 @@
       if (!url || typeof url !== 'string' || !url.startsWith('http')) return;
       if (list.some(x => x.url === url)) return;
       list.push({ url, time: Date.now() });
-      if (list.length > 80) list.shift();
+      if (list.length > 100) list.shift();
     }
   };
   window.__dgCaptured = __dgCaptured;
@@ -34,7 +34,6 @@
     !u.includes('/v/t1.30497') &&
     !u.includes('/v/t1.6435-');
 
-  // hook fetch
   const __origFetch = window.fetch;
   window.fetch = function (input, init) {
     try {
@@ -49,7 +48,6 @@
     return __origFetch.apply(this, arguments);
   };
 
-  // hook XHR
   const __origOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function (method, url) {
     try {
@@ -66,7 +64,9 @@
   // ─── Helpers ──────────────────────────────────────────────────────────
   const getSetting = (key) => localStorage.getItem(key) !== 'false';
 
-  // ─── VideoDownloader ──────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PLUGIN 1: VideoDownloader
+  // ═══════════════════════════════════════════════════════════════════════
   function initFbVideoDownloader() {
     if (window.__dgVideoInit) return;
     window.__dgVideoInit = true;
@@ -343,13 +343,69 @@
     }).observe(document.body, { childList: true, subtree: true });
   }
 
-  // ─── StorySaver v3 (Network Hook + Deep Fiber) ────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PLUGIN 2: StorySaver v5 — Story-bound URL matching
+  // ═══════════════════════════════════════════════════════════════════════
   function initFbStorySaver() {
     if (window.__dgStoryInit) return;
     window.__dgStoryInit = true;
 
     let pollingInterval = null;
-    let lastUrl = location.href;
+    let lastDialogOpen = false;
+
+    // ─── Story Tracking ───────────────────────────────────────────────
+    let activeVideoEl = null;
+    let activeStoryStartTime = 0;
+
+    function isViewingStory() {
+      if (/\/stories\//.test(location.href)) return true;
+
+      const dialog = document.querySelector('div[role="dialog"]');
+      if (!dialog) return false;
+
+      const closeBtn = dialog.querySelector(
+        'div[aria-label="Close"][role="button"], div[aria-label="ปิด"][role="button"]'
+      );
+      if (!closeBtn) return false;
+
+      const hasBigVideo = Array.from(dialog.querySelectorAll('video'))
+        .some(v => v.offsetWidth > 200 && v.offsetHeight > 200);
+      const hasBigImg = Array.from(dialog.querySelectorAll('img'))
+        .some(i => i.offsetWidth > 300 && i.naturalWidth > 400);
+
+      return hasBigVideo || hasBigImg;
+    }
+
+    function findActiveVideo() {
+      const dialog = document.querySelector('div[role="dialog"]');
+      const scope = dialog || document;
+
+      const videos = Array.from(scope.querySelectorAll('video'))
+        .filter(v => v.offsetWidth > 100 && v.offsetHeight > 100)
+        .sort((a, b) => {
+          const aPlaying = !a.paused && !a.ended ? 1 : 0;
+          const bPlaying = !b.paused && !b.ended ? 1 : 0;
+          if (aPlaying !== bPlaying) return bPlaying - aPlaying;
+          return (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight);
+        });
+
+      return videos[0] || null;
+    }
+
+    function onStoryChanged() {
+      const v = findActiveVideo();
+      if (!v || v === activeVideoEl) return;
+
+      activeVideoEl = v;
+      activeStoryStartTime = Date.now();
+
+      const cutoff = activeStoryStartTime - 10000;
+      __dgCaptured.videos = __dgCaptured.videos.filter(x => x.time >= cutoff);
+      __dgCaptured.images = __dgCaptured.images.filter(x => x.time >= cutoff);
+
+      console.log('[DEV/g0d] story changed — reset window at',
+        new Date(activeStoryStartTime).toLocaleTimeString());
+    }
 
     function findStoryTopBar() {
       let bar = Array.from(document.querySelectorAll('div.xtotuo0'))
@@ -395,7 +451,6 @@
       document.head.appendChild(style);
     }
 
-    // ── Deep fiber scan ───────────────────────────────────────────────
     function deepScanVideo(video) {
       const found = [];
 
@@ -462,47 +517,58 @@
       return found;
     }
 
-    // ── Detect media ──────────────────────────────────────────────────
     function detectMedia() {
       const debug = [];
-      const now = Date.now();
 
-      // 1) network captured videos
-      const recentVideos = __dgCaptured.videos.filter(v => now - v.time < 120000);
-      debug.push(`captured videos (recent): ${recentVideos.length}`);
-      if (recentVideos.length) {
-        const latest = recentVideos[recentVideos.length - 1];
-        debug.push(`  latest: ${latest.url.slice(0, 100)}`);
-        return { url: latest.url, type: 'video', debug };
+      const v = findActiveVideo();
+      if (v && v !== activeVideoEl) {
+        onStoryChanged();
       }
 
-      // 2) video element + deep fiber
-      const videos = Array.from(document.querySelectorAll('video'));
-      debug.push(`videos found: ${videos.length}`);
-      for (const v of videos) {
+      // 1) video element http URL ตรง ๆ
+      if (v) {
         if (v.currentSrc && v.currentSrc.startsWith('http')) {
+          debug.push(`video.currentSrc: ${v.currentSrc.slice(0, 100)}`);
           return { url: v.currentSrc, type: 'video', debug };
         }
         if (v.src && v.src.startsWith('http')) {
+          debug.push(`video.src: ${v.src.slice(0, 100)}`);
           return { url: v.src, type: 'video', debug };
         }
         const hits = deepScanVideo(v);
-        debug.push(`  deep scan hits: ${hits.length}`);
-        for (const h of hits) debug.push(`    ${h.path} -> ${h.url.slice(0, 100)}`);
-        if (hits.length) return { url: hits[0].url, type: 'video', debug };
+        if (hits.length) {
+          debug.push(`fiber hit: ${hits[0].url.slice(0, 100)}`);
+          return { url: hits[0].url, type: 'video', debug };
+        }
+      }
+
+      // 2) network captured videos (หลัง story เริ่ม)
+      const since = activeStoryStartTime || (Date.now() - 30000);
+      const captured = __dgCaptured.videos
+        .filter(x => x.time >= since)
+        .sort((a, b) => b.time - a.time);
+
+      debug.push(`captured videos since story start: ${captured.length}`);
+      if (captured.length) {
+        const best = captured.reduce((a, b) => a.url.length >= b.url.length ? a : b);
+        debug.push(`  best: ${best.url.slice(0, 100)}`);
+        return { url: best.url, type: 'video', debug };
       }
 
       // 3) captured images
-      const recentImgs = __dgCaptured.images.filter(v => now - v.time < 120000);
-      debug.push(`captured images (recent): ${recentImgs.length}`);
-      if (recentImgs.length) {
-        const latest = recentImgs[recentImgs.length - 1];
-        debug.push(`  latest img: ${latest.url.slice(0, 100)}`);
-        return { url: latest.url, type: 'image', debug };
+      const capturedImgs = __dgCaptured.images
+        .filter(x => x.time >= since)
+        .sort((a, b) => b.time - a.time);
+      debug.push(`captured images since story start: ${capturedImgs.length}`);
+      if (capturedImgs.length) {
+        const best = capturedImgs.reduce((a, b) => a.url.length >= b.url.length ? a : b);
+        debug.push(`  best img: ${best.url.slice(0, 100)}`);
+        return { url: best.url, type: 'image', debug };
       }
 
-      // 4) DOM images (กรอง profile/icon)
-      const imgs = Array.from(document.querySelectorAll('img'))
+      // 4) DOM images
+      const scope = document.querySelector('div[role="dialog"]') || document;
+      const domImgs = Array.from(scope.querySelectorAll('img'))
         .filter(img => {
           if (!img.src || !img.src.includes('fbcdn')) return false;
           if (img.src.includes('/v/t1.30497/')) return false;
@@ -511,14 +577,14 @@
         })
         .sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight));
 
-      debug.push(`cdn imgs (filtered): ${imgs.length}`);
-      if (imgs.length) {
-        debug.push(`  best: ${imgs[0].src.slice(0, 100)} (${imgs[0].naturalWidth}x${imgs[0].naturalHeight})`);
-        return { url: imgs[0].src, type: 'image', debug };
+      debug.push(`DOM imgs (filtered): ${domImgs.length}`);
+      if (domImgs.length) {
+        debug.push(`  best: ${domImgs[0].src.slice(0, 100)}`);
+        return { url: domImgs[0].src, type: 'image', debug };
       }
 
-      // 5) background-image
-      for (const el of document.querySelectorAll('div[role="dialog"] *')) {
+      // 5) bg-image
+      for (const el of scope.querySelectorAll('*')) {
         const bg = getComputedStyle(el).backgroundImage;
         const m = bg && bg.match(/url\(["']?(https:\/\/[^"')]+)["']?\)/);
         if (m && m[1].includes('fbcdn') && !m[1].includes('/v/t1.30497/')) {
@@ -605,7 +671,7 @@
         const media = detectMedia();
         if (!media) {
           console.warn('[DEV/g0d] StorySaver: no media found');
-          alert('DEV/g0d: ไม่พบสื่อ — ลอง reload หน้า story นี้แล้วกดใหม่');
+          alert('DEV/g0d: ไม่พบสื่อ — ลองเล่นสตอรี่สัก 1-2 วิแล้วกดใหม่');
           return;
         }
         console.log('[DEV/g0d] StorySaver: downloading', media.type, media.url.slice(0, 100));
@@ -632,47 +698,73 @@
       let attempts = 0;
       pollingInterval = setInterval(() => {
         const ok = createButtons();
-        if (ok || ++attempts >= 20) {
+        if (ok || ++attempts >= 30) {
           clearInterval(pollingInterval);
           pollingInterval = null;
         }
-      }, 500);
+      }, 400);
     }
 
     function stopPolling() {
       if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
     }
 
-    function checkPage() {
-      const isStory = /\/stories\//.test(location.href);
-      if (isStory) {
-        injectStyles();
-        if (!document.getElementById('dg-story-dl-btn')) startPolling();
-      } else {
-        stopPolling();
+    function checkDialogState() {
+      const nowViewing = isViewingStory();
+
+      if (nowViewing && !lastDialogOpen) {
+        activeVideoEl = null;
+        activeStoryStartTime = Date.now();
+        console.log('[DEV/g0d] story dialog opened');
+      }
+
+      if (!nowViewing && lastDialogOpen) {
         document.getElementById('dg-story-dl-btn')?.remove();
         document.getElementById('dg-story-open-btn')?.remove();
+        stopPolling();
+        activeVideoEl = null;
+        activeStoryStartTime = 0;
+      }
+      lastDialogOpen = nowViewing;
+
+      if (nowViewing) {
+        injectStyles();
+        onStoryChanged();
+        if (!document.getElementById('dg-story-dl-btn')) startPolling();
       }
     }
 
+    // poll ตรวจการเปลี่ยนสตอรี่แบบเร็ว
     setInterval(() => {
-      if (location.href !== lastUrl) {
-        lastUrl = location.href;
-        checkPage();
+      if (!lastDialogOpen) return;
+      const v = findActiveVideo();
+      if (v && v !== activeVideoEl) {
+        onStoryChanged();
+        if (!document.getElementById('dg-story-dl-btn')) startPolling();
       }
-    }, 500);
+    }, 250);
 
     let pending = false;
     new MutationObserver(() => {
       if (pending) return;
       pending = true;
-      setTimeout(() => { pending = false; checkPage(); }, 400);
+      setTimeout(() => { pending = false; checkDialogState(); }, 300);
     }).observe(document.body, { childList: true, subtree: true });
 
-    checkPage();
+    let lastUrl = location.href;
+    setInterval(() => {
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
+        checkDialogState();
+      }
+    }, 500);
+
+    checkDialogState();
   }
 
-  // ─── Register Plugins ─────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+  //  Register Plugins
+  // ═══════════════════════════════════════════════════════════════════════
   window.DEVg0d_PLUGINS = [
     {
       name: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px"><path d="M15 10l4.553-2.069A1 1 0 0 1 21 8.82v6.36a1 1 0 0 1-1.447.89L15 14M3 8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>VideoDownloader',
