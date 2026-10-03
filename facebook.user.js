@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DEV/g0d Facebook
 // @namespace    FREELOADING
-// @version      2.3
+// @version      2.4
 // @description  DEV/g0d - Facebook tools
 // @author       DEV/g0d
 // @license      MIT
