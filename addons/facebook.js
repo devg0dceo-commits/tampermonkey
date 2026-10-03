@@ -2,21 +2,91 @@
 // Register plugins via window.DEVg0d_PLUGINS for the main script to render
 
 (function () {
+  'use strict';
 
-  // ─── Helpers ──────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+  //  GLOBAL: NETWORK HOOK
+  //  ติดตั้งทันที (document-start) เพื่อดัก URL .mp4 ที่ FB โหลด
+  // ═══════════════════════════════════════════════════════════════════════
+  const __dgCaptured = {
+    videos: [],
+    images: [],
+    remember(list, url) {
+      if (!url || typeof url !== 'string' || !url.startsWith('http')) return;
+      if (list.some(x => x.url === url)) return;
+      list.push({ url, time: Date.now() });
+      if (list.length > 80) list.shift();
+    }
+  };
+  window.__dgCaptured = __dgCaptured;
+
+  const isVideoUrl = (u) =>
+    typeof u === 'string' &&
+    u.startsWith('http') &&
+    (u.includes('.fbcdn.net') || u.includes('video.')) &&
+    (u.includes('.mp4') || u.includes('/v/t42.') || u.includes('/o1/v/') ||
+     u.includes('efg=') || /\/v\/t\d+\.\d+-\d+\//.test(u));
+
+  const isImageUrl = (u) =>
+    typeof u === 'string' &&
+    u.startsWith('http') &&
+    u.includes('.fbcdn.net') &&
+    !u.includes('/v/t1.30497') &&
+    !u.includes('/v/t1.6435-');
+
+  // hook fetch
+  const __origFetch = window.fetch;
+  window.fetch = function (input, init) {
+    try {
+      const url = typeof input === 'string' ? input : (input?.url || '');
+      if (isVideoUrl(url)) {
+        console.log('[DEV/g0d] fetch video:', url.slice(0, 120));
+        __dgCaptured.remember(__dgCaptured.videos, url);
+      } else if (isImageUrl(url)) {
+        __dgCaptured.remember(__dgCaptured.images, url);
+      }
+    } catch (e) {}
+    return __origFetch.apply(this, arguments);
+  };
+
+  // hook XHR
+  const __origOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    try {
+      if (isVideoUrl(url)) {
+        console.log('[DEV/g0d] xhr video:', url.slice(0, 120));
+        __dgCaptured.remember(__dgCaptured.videos, url);
+      } else if (isImageUrl(url)) {
+        __dgCaptured.remember(__dgCaptured.images, url);
+      }
+    } catch (e) {}
+    return __origOpen.apply(this, arguments);
+  };
+
+  // ─── Helpers ──────────────────────────────────────────────────────────
   const getSetting = (key) => localStorage.getItem(key) !== 'false';
 
-  // ─── VideoDownloader ──────────────────────────────────────────────────────
+  // ─── VideoDownloader ──────────────────────────────────────────────────
   function initFbVideoDownloader() {
+    if (window.__dgVideoInit) return;
+    window.__dgVideoInit = true;
+
     function getVideoIdFromVideoElement(video) {
       try {
         let key = '';
         for (let k in video.parentElement) if (k.startsWith('__reactProps')) { key = k; break; }
-        if (key) { const props = video.parentElement[key].children.props; const id = props.videoFBID || props.coreVideoPlayerMetaData?.videoFBID; if (id) return id; }
+        if (key) {
+          const props = video.parentElement[key].children.props;
+          const id = props.videoFBID || props.coreVideoPlayerMetaData?.videoFBID;
+          if (id) return id;
+        }
       } catch (e) {}
       try {
         const wrapper = video.closest('[data-instancekey]');
-        if (wrapper) { const m = wrapper.getAttribute('data-instancekey')?.match(/id-vpuid-([a-f0-9-]+)/); if (m) return m[1]; }
+        if (wrapper) {
+          const m = wrapper.getAttribute('data-instancekey')?.match(/id-vpuid-([a-f0-9-]+)/);
+          if (m) return m[1];
+        }
       } catch (e) {}
       try {
         let el = video;
@@ -24,7 +94,10 @@
           for (let k in el) if (k.startsWith('__reactProps') || k.startsWith('__reactInternalInstance')) {
             try {
               const p = el[k];
-              if (p?.children?.props) { const id = p.children.props.videoFBID || p.children.props.videoId; if (id) return id; }
+              if (p?.children?.props) {
+                const id = p.children.props.videoFBID || p.children.props.videoId;
+                if (id) return id;
+              }
               if (p?.videoFBID) return p.videoFBID;
               if (p?.videoId) return p.videoId;
             } catch (e) {}
@@ -42,7 +115,10 @@
 
     async function getDtsg() {
       try { if (window.require) return require('DTSGInitialData').token; } catch (e) {}
-      try { const m = document.documentElement.innerHTML.match(/"token":"([^"]+)"/); if (m) return m[1]; } catch (e) {}
+      try {
+        const m = document.documentElement.innerHTML.match(/"token":"([^"]+)"/);
+        if (m) return m[1];
+      } catch (e) {}
       try {
         for (const s of document.querySelectorAll('script')) {
           if (s.textContent?.includes('DTSGInitialData')) {
@@ -58,7 +134,9 @@
       const f = [];
       for (const a in d) if (d.hasOwnProperty(a)) {
         const g = e ? e + '[' + a + ']' : a, b = d[a];
-        f.push(b !== null && typeof b === 'object' ? stringifyVariables(b, g) : encodeURIComponent(g) + '=' + encodeURIComponent(b));
+        f.push(b !== null && typeof b === 'object'
+          ? stringifyVariables(b, g)
+          : encodeURIComponent(g) + '=' + encodeURIComponent(b));
       }
       return f.join('&');
     }
@@ -80,7 +158,16 @@
       const res = await fetch('https://www.facebook.com/api/graphql/', {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-requested-with': 'XMLHttpRequest' },
-        body: stringifyVariables({ doc_id: '5279476072161634', variables: JSON.stringify({ UFI2CommentsProvider_commentsKey: 'CometTahoeSidePaneQuery', caller: 'CHANNEL_VIEW_FROM_PAGE_TIMELINE', videoID: videoId }), fb_dtsg: dtsg, server_timestamps: true })
+        body: stringifyVariables({
+          doc_id: '5279476072161634',
+          variables: JSON.stringify({
+            UFI2CommentsProvider_commentsKey: 'CometTahoeSidePaneQuery',
+            caller: 'CHANNEL_VIEW_FROM_PAGE_TIMELINE',
+            videoID: videoId
+          }),
+          fb_dtsg: dtsg,
+          server_timestamps: true
+        })
       });
       const lines = (await res.text()).split('\n');
       if (!lines.length) throw new Error('Empty response');
@@ -93,35 +180,50 @@
 
     async function getVideoUrl(videoId) {
       const dtsg = await getDtsg();
-      try { return await getLinkFbVideo2(videoId, dtsg); } catch (e) {
-        try { return await getLinkFbVideo1(videoId, dtsg); } catch (e2) {
-          throw new Error('Both download methods failed');
-        }
+      try { return await getLinkFbVideo2(videoId, dtsg); }
+      catch (e) {
+        try { return await getLinkFbVideo1(videoId, dtsg); }
+        catch (e2) { throw new Error('Both download methods failed'); }
       }
     }
 
     function downloadBlob(blobUrl, name) {
-      const l = document.createElement('a'); l.href = blobUrl; l.download = name;
-      l.style.display = 'none'; document.body.appendChild(l); l.click();
-      document.body.removeChild(l); setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+      const l = document.createElement('a');
+      l.href = blobUrl; l.download = name;
+      l.style.display = 'none';
+      document.body.appendChild(l);
+      l.click();
+      document.body.removeChild(l);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
     }
 
-    async function downloadURL(url, name) {
+    function downloadURL(url, name) {
       if (typeof GM_download !== 'undefined') {
-        GM_download({ url, name, saveAs: false, onload: () => {}, onerror: () => downloadUsingFetch(url, name) });
+        GM_download({
+          url, name, saveAs: false,
+          onload: () => {},
+          onerror: () => downloadUsingFetch(url, name)
+        });
         return;
       }
       downloadUsingFetch(url, name);
     }
 
-    async function downloadUsingFetch(url, name) {
+    function downloadUsingFetch(url, name) {
       try {
         if (typeof GM_xmlhttpRequest !== 'undefined') {
-          GM_xmlhttpRequest({ method: 'GET', url, responseType: 'blob', onload: (r) => downloadBlob(URL.createObjectURL(r.response), name), onerror: () => window.open(url, '_blank') });
+          GM_xmlhttpRequest({
+            method: 'GET', url, responseType: 'blob',
+            onload: (r) => downloadBlob(URL.createObjectURL(r.response), name),
+            onerror: () => window.open(url, '_blank')
+          });
         } else {
-          const r = await fetch(url); downloadBlob(URL.createObjectURL(await r.blob()), name);
+          fetch(url)
+            .then(r => r.blob())
+            .then(b => downloadBlob(URL.createObjectURL(b), name))
+            .catch(() => window.open(url, '_blank'));
         }
-      } catch (e) { console.error('Download failed:', e); }
+      } catch (e) { console.error('[DEV/g0d] Download failed:', e); }
     }
 
     function createDownloadIcon(videoWrapper) {
@@ -133,13 +235,11 @@
 
       const btnStyle = 'width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:transparent;color:white;border:none;border-radius:50%;cursor:pointer;transition:opacity .2s ease;pointer-events:auto;padding:0;filter:drop-shadow(0 1px 3px rgba(0,0,0,0.6))';
 
-      // Download button
       const dlIcon = document.createElement('button');
       dlIcon.className = 'fb-dl-icon';
       dlIcon.innerHTML = svgDL;
       dlIcon.style.cssText = btnStyle;
       dlIcon.title = 'Download video';
-
       dlIcon.addEventListener('mouseenter', () => { dlIcon.style.opacity = '.7'; });
       dlIcon.addEventListener('mouseleave', () => { if (!dlIcon.classList.contains('downloading')) dlIcon.style.opacity = '1'; });
 
@@ -153,22 +253,29 @@
           const videoId = getVideoIdFromVideoElement(video);
           if (!videoId) throw new Error('Could not get video ID');
           const videoUrl = await getVideoUrl(videoId);
-          await downloadURL(videoUrl, `fb_video_${videoId}.mp4`);
+          downloadURL(videoUrl, `fb_video_${videoId}.mp4`);
           dlIcon.innerHTML = svgOK;
-          setTimeout(() => { dlIcon.innerHTML = svgDL; dlIcon.classList.remove('downloading'); dlIcon.style.opacity = '1'; }, 2000);
+          setTimeout(() => {
+            dlIcon.innerHTML = svgDL;
+            dlIcon.classList.remove('downloading');
+            dlIcon.style.opacity = '1';
+          }, 2000);
         } catch (err) {
+          console.error('[DEV/g0d] Video download failed:', err);
           dlIcon.innerHTML = svgErr;
-          setTimeout(() => { dlIcon.innerHTML = svgDL; dlIcon.classList.remove('downloading'); dlIcon.style.opacity = '1'; }, 3000);
+          setTimeout(() => {
+            dlIcon.innerHTML = svgDL;
+            dlIcon.classList.remove('downloading');
+            dlIcon.style.opacity = '1';
+          }, 3000);
         }
       });
 
-      // Open new tab button
       const openIcon = document.createElement('button');
       openIcon.className = 'fb-open-icon';
       openIcon.innerHTML = svgOpen;
       openIcon.style.cssText = btnStyle;
       openIcon.title = 'Open in new tab';
-
       openIcon.addEventListener('mouseenter', () => { openIcon.style.opacity = '.7'; });
       openIcon.addEventListener('mouseleave', () => { openIcon.style.opacity = '1'; });
 
@@ -184,13 +291,11 @@
         } catch (err) { console.error('[DEV/g0d] FB open tab failed:', err); }
       });
 
-      // Wrap both buttons in a container
       const wrap = document.createElement('div');
       wrap.className = 'fb-btn-wrap';
       wrap.style.cssText = 'position:fixed;display:flex;gap:2px;align-items:center;z-index:9999999;pointer-events:auto';
       wrap.appendChild(openIcon);
       wrap.appendChild(dlIcon);
-
       return wrap;
     }
 
@@ -199,12 +304,16 @@
       if (/\/watch\?v=/.test(url) || /\/stories\//.test(url)) return;
 
       const videoWrapper = videoElement.closest('div.x5yr21d.x1uhb9sk') || videoElement.parentElement;
-      if (videoWrapper.getAttribute('data-dg-dl')) return;
+      if (!videoWrapper || videoWrapper.getAttribute('data-dg-dl')) return;
       videoWrapper.setAttribute('data-dg-dl', '1');
 
       const wrap = createDownloadIcon(videoWrapper);
       const updatePos = () => {
-        if (!document.body.contains(videoWrapper)) { wrap.remove(); clearInterval(interval); return; }
+        if (!document.body.contains(videoWrapper)) {
+          wrap.remove();
+          clearInterval(interval);
+          return;
+        }
         const r = videoWrapper.getBoundingClientRect();
         if (r.width > 0 && r.height > 0) {
           wrap.style.display = 'flex';
@@ -219,159 +328,351 @@
       const interval = setInterval(updatePos, 100);
     }
 
-    // Inject spin animation
     const style = document.createElement('style');
     style.textContent = '@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}';
     document.head.appendChild(style);
 
-    // Attach to existing videos
     setTimeout(() => document.querySelectorAll('video').forEach(addIconToVideo), 1000);
 
-    // Watch for new videos
     new MutationObserver((mutations) => {
-      for (const m of mutations) for (const node of m.addedNodes) if (node.nodeType === 1) {
+      for (const m of mutations) for (const node of m.addedNodes) {
+        if (node.nodeType !== 1) continue;
         if (node.tagName === 'VIDEO') addIconToVideo(node);
         node.querySelectorAll?.('video').forEach(v => setTimeout(() => addIconToVideo(v), 300));
       }
     }).observe(document.body, { childList: true, subtree: true });
   }
 
-  // ─── StorySaver ───────────────────────────────────────────────────────────
+  // ─── StorySaver v3 (Network Hook + Deep Fiber) ────────────────────────
   function initFbStorySaver() {
-    const MAX_ATTEMPTS = 10;
+    if (window.__dgStoryInit) return;
+    window.__dgStoryInit = true;
 
-    class FacebookStoryDownloader {
-      constructor() {
-        this.mediaUrl = null;
-        this.detectedVideo = null;
-        this.setupMutationObserver();
-      }
+    let pollingInterval = null;
+    let lastUrl = location.href;
 
-      setupMutationObserver() {
-        new MutationObserver(() => this.checkPageStructure())
-          .observe(document.body, { childList: true, subtree: true });
-      }
+    function findStoryTopBar() {
+      let bar = Array.from(document.querySelectorAll('div.xtotuo0'))
+        .find(b => b instanceof HTMLElement && b.offsetHeight > 0);
+      if (bar) return bar;
 
-      checkPageStructure() {
-        const btn = document.getElementById('dg-story-dl-btn');
-        if (/(\/stories\/)/.test(window.location.href)) {
-          this.injectStyles();
-          this.createButtonWithPolling();
-        } else if (btn) {
-          btn.remove();
-          document.getElementById('dg-story-open-btn')?.remove();
+      const closeBtn = document.querySelector(
+        'div[aria-label="Close"][role="button"], div[aria-label="ปิด"][role="button"]'
+      );
+      if (closeBtn) {
+        let p = closeBtn.parentElement;
+        for (let i = 0; i < 4 && p; i++) {
+          if (p.querySelectorAll('[role="button"]').length >= 2) return p;
+          p = p.parentElement;
         }
       }
 
-      injectStyles() {
-        if (document.getElementById('dg-story-dl-styles')) return;
-        const style = document.createElement('style');
-        style.id = 'dg-story-dl-styles';
-        style.textContent = `#dg-story-dl-btn,#dg-story-open-btn{border:none;background:transparent;color:white;cursor:pointer;z-index:9999;width:28px;height:28px;padding:0;margin:0;align-self:center;display:flex;align-items:center;justify-content:center;transition:opacity .2s ease}#dg-story-dl-btn:hover,#dg-story-open-btn:hover{opacity:.7}#dg-story-dl-btn svg,#dg-story-open-btn svg{width:22px;height:22px}`;
-        document.head.appendChild(style);
+      const dialog = document.querySelector('div[role="dialog"]');
+      if (dialog) {
+        const header = dialog.querySelector('div[role="banner"], header');
+        if (header) return header;
+        for (const c of dialog.children) {
+          if (c.offsetHeight > 40 && c.offsetHeight < 120) return c;
+        }
       }
+      return null;
+    }
 
-      createButtonWithPolling() {
-        let attempts = 0;
-        const interval = setInterval(() => {
-          if (document.getElementById('dg-story-dl-btn') || this.createButton() || ++attempts >= MAX_ATTEMPTS) clearInterval(interval);
-        }, 500);
-      }
+    function injectStyles() {
+      if (document.getElementById('dg-story-dl-styles')) return;
+      const style = document.createElement('style');
+      style.id = 'dg-story-dl-styles';
+      style.textContent = `
+        #dg-story-dl-btn,#dg-story-open-btn{
+          border:none;background:transparent;color:white;cursor:pointer;
+          z-index:9999;width:28px;height:28px;padding:0;margin:0;
+          align-self:center;display:flex;align-items:center;justify-content:center;
+          transition:opacity .2s ease;
+        }
+        #dg-story-dl-btn:hover,#dg-story-open-btn:hover{opacity:.7}
+        #dg-story-dl-btn svg,#dg-story-open-btn svg{width:22px;height:22px}
+      `;
+      document.head.appendChild(style);
+    }
 
-      createButton() {
-        if (document.getElementById('dg-story-dl-btn')) return null;
-        const topBar = Array.from(document.querySelectorAll('div.xtotuo0')).find(b => b instanceof HTMLElement && b.offsetHeight > 0);
-        if (!topBar) return null;
+    // ── Deep fiber scan ───────────────────────────────────────────────
+    function deepScanVideo(video) {
+      const found = [];
 
-        const btn = document.createElement('button');
-        btn.id = 'dg-story-dl-btn';
-        btn.title = 'Download Story';
-        btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
-        btn.addEventListener('click', () => this.handleDownload());
-
-        const openBtn = document.createElement('button');
-        openBtn.id = 'dg-story-open-btn';
-        openBtn.className = 'igStoryBtn';
-        openBtn.title = 'Open in new tab';
-        openBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
-        openBtn.addEventListener('click', async () => {
-          try {
-            await this.detectMedia();
-            if (this.mediaUrl) window.open(this.mediaUrl, '_blank');
-          } catch (e) { console.error('[DEV/g0d] Story open tab failed:', e); }
-        });
-
-        topBar.appendChild(openBtn);
-        topBar.appendChild(btn);
-        return btn;
-      }
-
-      async handleDownload() {
-        try {
-          await this.detectMedia();
-          if (!this.mediaUrl) throw new Error('No media found');
-          await this.downloadMedia(this.mediaUrl, this.generateFileName());
-        } catch (e) { console.error('[DEV/g0d] Story download failed:', e); }
-      }
-
-      async detectMedia() {
-        const video = this.findVideo(), image = this.findImage();
-        if (video) { this.mediaUrl = video; this.detectedVideo = true; }
-        else if (image) { this.mediaUrl = image.src; this.detectedVideo = false; }
-      }
-
-      findVideo() {
-        for (const v of document.querySelectorAll('video')) {
-          if (v.offsetHeight > 0) { const url = this.searchVideoSource(v); if (url) return url; }
+      function pickUrl(o) {
+        if (!o || typeof o !== 'object') return null;
+        const keys = [
+          'hd_src','sd_src','hdSrc','sdSrc',
+          'playable_url','playable_url_quality_hd','playable_url_quality_sd',
+          'browser_native_hd_url','browser_native_sd_url',
+          'video_url','url','src'
+        ];
+        for (const k of keys) {
+          const v = o[k];
+          if (typeof v === 'string' && v.startsWith('http') && v.includes('fbcdn')) return v;
         }
         return null;
       }
 
-      searchVideoSource(video) {
-        const reactFiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
-        if (!reactFiberKey) return null;
-        const reactKey = reactFiberKey.replace('__reactFiber', '');
-        const parent = video.parentElement?.parentElement?.parentElement?.parentElement;
-        const reactProps = parent?.[`__reactProps${reactKey}`];
-        const implementations = reactProps?.children?.[0]?.props?.children?.props?.implementations ?? reactProps?.children?.props?.children?.props?.implementations;
-        if (implementations) {
-          for (const index of [1, 0, 2]) {
-            const source = implementations[index]?.data;
-            const url = source?.hdSrc || source?.sdSrc || source?.hd_src || source?.sd_src;
-            if (url) return url;
+      function walk(obj, depth, path, visited) {
+        if (depth > 8 || !obj || typeof obj !== 'object') return;
+        if (visited.has(obj)) return;
+        visited.add(obj);
+
+        if (Array.isArray(obj)) {
+          for (let i = 0; i < Math.min(obj.length, 10); i++) {
+            const u = pickUrl(obj[i]);
+            if (u) { found.push({ url: u, path: path + `[${i}]` }); return; }
+            walk(obj[i], depth + 1, path + `[${i}]`, visited);
           }
+          return;
         }
-        const videoData = video[reactFiberKey]?.return?.stateNode?.props?.videoData?.$1;
-        return videoData?.hd_src || videoData?.sd_src || null;
+
+        const u = pickUrl(obj);
+        if (u) { found.push({ url: u, path }); return; }
+
+        for (const k of Object.keys(obj)) {
+          if (k.startsWith('__')) continue;
+          if (k === 'return' || k === 'child' || k === 'sibling') continue;
+          try {
+            walk(obj[k], depth + 1, path + '.' + k, visited);
+          } catch (e) {}
+          if (found.length > 3) return;
+        }
       }
 
-      findImage() {
-        const images = Array.from(document.querySelectorAll('img')).filter(img => img.offsetHeight > 0 && img.src.includes('cdn'));
-        return images.find(img => img.height > 400) || null;
+      try {
+        const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
+        if (!fiberKey) return found;
+
+        let fiber = video[fiberKey];
+        for (let i = 0; i < 30 && fiber; i++) {
+          const visited = new WeakSet();
+          if (fiber.memoizedProps) walk(fiber.memoizedProps, 0, `fiber[${i}].memoizedProps`, visited);
+          if (fiber.memoizedState) walk(fiber.memoizedState, 0, `fiber[${i}].memoizedState`, visited);
+          if (fiber.stateNode && typeof fiber.stateNode === 'object') {
+            walk(fiber.stateNode, 0, `fiber[${i}].stateNode`, visited);
+          }
+          if (fiber.updateQueue) walk(fiber.updateQueue, 0, `fiber[${i}].updateQueue`, visited);
+          if (found.length > 0) break;
+          fiber = fiber.return;
+        }
+      } catch (e) {}
+
+      return found;
+    }
+
+    // ── Detect media ──────────────────────────────────────────────────
+    function detectMedia() {
+      const debug = [];
+      const now = Date.now();
+
+      // 1) network captured videos
+      const recentVideos = __dgCaptured.videos.filter(v => now - v.time < 120000);
+      debug.push(`captured videos (recent): ${recentVideos.length}`);
+      if (recentVideos.length) {
+        const latest = recentVideos[recentVideos.length - 1];
+        debug.push(`  latest: ${latest.url.slice(0, 100)}`);
+        return { url: latest.url, type: 'video', debug };
       }
 
-      generateFileName() {
-        const timestamp = new Date().toISOString().split('T')[0];
-        const user = Array.from(document.querySelectorAll('span.xuxw1ft.xlyipyv')).find(e => e instanceof HTMLElement && e.offsetWidth > 0);
-        const userName = user?.innerText || 'unknown';
-        return `${userName}-${timestamp}.${this.detectedVideo ? 'mp4' : 'jpg'}`;
+      // 2) video element + deep fiber
+      const videos = Array.from(document.querySelectorAll('video'));
+      debug.push(`videos found: ${videos.length}`);
+      for (const v of videos) {
+        if (v.currentSrc && v.currentSrc.startsWith('http')) {
+          return { url: v.currentSrc, type: 'video', debug };
+        }
+        if (v.src && v.src.startsWith('http')) {
+          return { url: v.src, type: 'video', debug };
+        }
+        const hits = deepScanVideo(v);
+        debug.push(`  deep scan hits: ${hits.length}`);
+        for (const h of hits) debug.push(`    ${h.path} -> ${h.url.slice(0, 100)}`);
+        if (hits.length) return { url: hits[0].url, type: 'video', debug };
       }
 
-      async downloadMedia(url, filename) {
-        try {
-          const r = await fetch(url), b = await r.blob();
-          const l = document.createElement('a');
-          l.href = URL.createObjectURL(b); l.download = filename;
-          document.body.appendChild(l); l.click();
-          document.body.removeChild(l); URL.revokeObjectURL(l.href);
-        } catch (e) { console.error('[DEV/g0d] Story download error:', e); }
+      // 3) captured images
+      const recentImgs = __dgCaptured.images.filter(v => now - v.time < 120000);
+      debug.push(`captured images (recent): ${recentImgs.length}`);
+      if (recentImgs.length) {
+        const latest = recentImgs[recentImgs.length - 1];
+        debug.push(`  latest img: ${latest.url.slice(0, 100)}`);
+        return { url: latest.url, type: 'image', debug };
+      }
+
+      // 4) DOM images (กรอง profile/icon)
+      const imgs = Array.from(document.querySelectorAll('img'))
+        .filter(img => {
+          if (!img.src || !img.src.includes('fbcdn')) return false;
+          if (img.src.includes('/v/t1.30497/')) return false;
+          if (img.src.includes('/v/t1.6435-')) return false;
+          return img.offsetWidth > 0 && img.naturalWidth > 400;
+        })
+        .sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight));
+
+      debug.push(`cdn imgs (filtered): ${imgs.length}`);
+      if (imgs.length) {
+        debug.push(`  best: ${imgs[0].src.slice(0, 100)} (${imgs[0].naturalWidth}x${imgs[0].naturalHeight})`);
+        return { url: imgs[0].src, type: 'image', debug };
+      }
+
+      // 5) background-image
+      for (const el of document.querySelectorAll('div[role="dialog"] *')) {
+        const bg = getComputedStyle(el).backgroundImage;
+        const m = bg && bg.match(/url\(["']?(https:\/\/[^"')]+)["']?\)/);
+        if (m && m[1].includes('fbcdn') && !m[1].includes('/v/t1.30497/')) {
+          debug.push(`bg-image: ${m[1].slice(0, 100)}`);
+          return { url: m[1], type: 'image', debug };
+        }
+      }
+
+      console.log('[DEV/g0d] detectMedia debug:\n' + debug.join('\n'));
+      return null;
+    }
+
+    function buildFileName(type) {
+      const timestamp = new Date().toISOString().split('T')[0];
+      const userSelectors = [
+        'span.xuxw1ft.xlyipyv',
+        'h2 span',
+        'a[role="link"] span',
+        'div[role="dialog"] span'
+      ];
+      let userName = 'unknown';
+      for (const sel of userSelectors) {
+        const el = Array.from(document.querySelectorAll(sel))
+          .find(e => e instanceof HTMLElement && e.offsetWidth > 0 && e.innerText.trim());
+        if (el) { userName = el.innerText.trim().split('\n')[0]; break; }
+      }
+      userName = userName.replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
+      return `${userName}-${timestamp}.${type === 'video' ? 'mp4' : 'jpg'}`;
+    }
+
+    function downloadMedia(url, filename) {
+      if (typeof GM_download !== 'undefined') {
+        GM_download({
+          url, name: filename, saveAs: false,
+          onerror: () => fetchDownload(url, filename)
+        });
+        return;
+      }
+      if (typeof GM_xmlhttpRequest !== 'undefined') {
+        GM_xmlhttpRequest({
+          method: 'GET', url, responseType: 'blob',
+          onload: (r) => {
+            const blobUrl = URL.createObjectURL(r.response);
+            const a = document.createElement('a');
+            a.href = blobUrl; a.download = filename;
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+          },
+          onerror: () => window.open(url, '_blank')
+        });
+        return;
+      }
+      fetchDownload(url, filename);
+    }
+
+    async function fetchDownload(url, filename) {
+      try {
+        const r = await fetch(url);
+        const b = await r.blob();
+        const blobUrl = URL.createObjectURL(b);
+        const a = document.createElement('a');
+        a.href = blobUrl; a.download = filename;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+      } catch (e) {
+        console.error('[DEV/g0d] Story download error:', e);
+        window.open(url, '_blank');
       }
     }
 
-    new FacebookStoryDownloader();
+    function createButtons() {
+      if (document.getElementById('dg-story-dl-btn')) return true;
+      const topBar = findStoryTopBar();
+      if (!topBar) return false;
+
+      const btn = document.createElement('button');
+      btn.id = 'dg-story-dl-btn';
+      btn.title = 'Download Story';
+      btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
+      btn.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const media = detectMedia();
+        if (!media) {
+          console.warn('[DEV/g0d] StorySaver: no media found');
+          alert('DEV/g0d: ไม่พบสื่อ — ลอง reload หน้า story นี้แล้วกดใหม่');
+          return;
+        }
+        console.log('[DEV/g0d] StorySaver: downloading', media.type, media.url.slice(0, 100));
+        downloadMedia(media.url, buildFileName(media.type));
+      });
+
+      const openBtn = document.createElement('button');
+      openBtn.id = 'dg-story-open-btn';
+      openBtn.title = 'Open in new tab';
+      openBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
+      openBtn.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const media = detectMedia();
+        if (media) window.open(media.url, '_blank');
+      });
+
+      topBar.appendChild(openBtn);
+      topBar.appendChild(btn);
+      return true;
+    }
+
+    function startPolling() {
+      if (pollingInterval) return;
+      let attempts = 0;
+      pollingInterval = setInterval(() => {
+        const ok = createButtons();
+        if (ok || ++attempts >= 20) {
+          clearInterval(pollingInterval);
+          pollingInterval = null;
+        }
+      }, 500);
+    }
+
+    function stopPolling() {
+      if (pollingInterval) { clearInterval(pollingInterval); pollingInterval = null; }
+    }
+
+    function checkPage() {
+      const isStory = /\/stories\//.test(location.href);
+      if (isStory) {
+        injectStyles();
+        if (!document.getElementById('dg-story-dl-btn')) startPolling();
+      } else {
+        stopPolling();
+        document.getElementById('dg-story-dl-btn')?.remove();
+        document.getElementById('dg-story-open-btn')?.remove();
+      }
+    }
+
+    setInterval(() => {
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
+        checkPage();
+      }
+    }, 500);
+
+    let pending = false;
+    new MutationObserver(() => {
+      if (pending) return;
+      pending = true;
+      setTimeout(() => { pending = false; checkPage(); }, 400);
+    }).observe(document.body, { childList: true, subtree: true });
+
+    checkPage();
   }
 
-  // ─── Register Plugins ─────────────────────────────────────────────────────
+  // ─── Register Plugins ─────────────────────────────────────────────────
   window.DEVg0d_PLUGINS = [
     {
       name: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px"><path d="M15 10l4.553-2.069A1 1 0 0 1 21 8.82v6.36a1 1 0 0 1-1.447.89L15 14M3 8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>VideoDownloader',
@@ -386,5 +687,9 @@
       init: initFbStorySaver,
     },
   ];
+
+  // แจ้ง main script ว่า plugin พร้อมแล้ว
+  window.__dgPluginsReady = true;
+  window.dispatchEvent(new Event('dg-plugins-ready'));
 
 })();
