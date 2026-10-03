@@ -8,7 +8,7 @@
   ;['mousedown','mouseup','click'].forEach(type => {
     window.addEventListener(type, (e) => {
       if (!e.isTrusted) return;
-      const els = document.querySelectorAll('.dg-feed-wrap button, .dg-reel-wrap button');
+      const els = document.querySelectorAll('.dg-feed-wrap button, .dg-reel-wrap button, .igStoryBtn');
       for (const el of els) {
         const r = el.getBoundingClientRect();
         if (r.width === 0 || r.height === 0) continue;
@@ -43,25 +43,14 @@
     } catch(e) { window.open(url, '_blank'); }
   }
 
-  // ─── 1. Story Downloader ──────────────────────────────────────────────────
+  // ─── 1. Story Downloader (เฉพาะ video) ────────────────────────────────────
   function initIgStorySaver() {
 
     function getStoryUsername() {
       return location.pathname.split('/').filter(s => s.length > 0).at(1);
     }
 
-    function getStoryUrlId() {
-      return location.pathname.split('/').filter(s => /^[0-9]{10,}$/.test(s)).at(-1);
-    }
-
-    function getStoryProgressIndex() {
-      const bars = document.querySelectorAll('div.x1xmf6yo > div');
-      let idx = 0;
-      bars.forEach((bar, i) => { if (bar.children.length > 0) idx = i; });
-      return idx;
-    }
-
-    // exact same as ig-story-test.user.js
+    // React fiber walk — ดึง video URL จริง
     function getVideoRealUrl(video) {
       const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
       if (!fiberKey) return null;
@@ -104,66 +93,23 @@
       return null;
     }
 
-    async function fetchStoryMedia() {
-      const username = getStoryUsername();
-      if (!username) return null;
-
-      const userRes = await new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: 'GET',
-          url: `https://i.instagram.com/api/v1/users/web_profile_info/?username=${username}`,
-          headers: { 'X-IG-App-ID': getAppID() },
-          onload: r => { try { resolve(JSON.parse(r.responseText)); } catch(e) { reject(e); } },
-          onerror: reject,
-        });
-      });
-
-      const userId = userRes?.data?.user?.pk || userRes?.data?.user?.id;
-      if (!userId) return null;
-
-      const storiesRes = await new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: 'GET',
-          url: `https://www.instagram.com/graphql/query/?query_hash=15463e8449a83d3d60b06be7e90627c7&variables=%7B%22reel_ids%22:%5B%22${userId}%22%5D,%22precomposed_overlay%22:false%7D`,
-          onload: r => { try { resolve(JSON.parse(r.responseText)); } catch(e) { reject(e); } },
-          onerror: reject,
-        });
-      });
-
-      const items = storiesRes?.data?.reels_media?.[0]?.items;
-      if (!items?.length) return null;
-
-      const urlId = getStoryUrlId();
-      let item = urlId ? items.find(i => i.id == urlId) : null;
-      if (!item) { const idx = getStoryProgressIndex(); item = items[idx] || items[0]; }
-      if (!item) return null;
-
-      if (item.video_resources?.length) return { url: item.video_resources[0].src, ext: 'mp4' };
-      if (item.display_resources?.length) return { url: item.display_resources.at(-1).src, ext: 'jpg' };
-      if (item.display_url) return { url: item.display_url, ext: 'jpg' };
-      return null;
+    // หา video element ในสตอรี่ (เฉพาะ video — ไม่สนใจรูป)
+    function findStoryVideo() {
+      return document.querySelector('body > div section video[playsinline]')
+          || document.querySelector('video[playsinline]');
     }
 
-    async function detectCurrentMedia() {
-      try { const m = await fetchStoryMedia(); if (m) return m; } catch(e) {
-        console.warn('[DEV/g0d] fetchStoryMedia failed, falling back to DOM:', e);
-      }
-      // DOM fallback (ighelper pattern)
-      const video = document.querySelector('body > div section video[playsinline]');
-      if (video) { const url = getVideoRealUrl(video); if (url) return { url, ext: 'mp4' }; }
-      const imgEl = document.querySelector('body > div section img[referrerpolicy][class]')
-                 || document.querySelector('body > div section img._aa63');
-      if (imgEl) {
-        const srcset = imgEl.getAttribute('srcset');
-        const url = srcset ? srcset.split(',')[0].split(' ')[0] : imgEl.src;
-        if (url) return { url, ext: 'jpg' };
-      }
+    function detectCurrentMedia() {
+      const video = findStoryVideo();
+      if (!video) return null;
+      const url = getVideoRealUrl(video);
+      if (url) return { url, ext: 'mp4' };
       return null;
     }
 
     async function downloadCurrent() {
       const media = await detectCurrentMedia();
-      if (!media) { console.warn('[DEV/g0d] No media found'); return; }
+      if (!media) { console.warn('[DEV/g0d] No video found'); return; }
       const username = getStoryUsername() || 'unknown';
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const filename = `${username}_${ts}.${media.ext}`;
@@ -187,52 +133,33 @@
     `;
     document.head.appendChild(style);
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  PATCHED: injectButton — มี fallback 3 แบบ (story ปกติ + highlight)
-    // ═══════════════════════════════════════════════════════════════════
     function injectButton() {
-      if (document.getElementById('igStoryBtnWrap')) return null;
+      // ไม่มี video → เอาปุ่มออก (กรณีเลื่อนจาก video → รูป)
+      if (!findStoryVideo()) {
+        document.getElementById('igStoryBtnWrap')?.remove();
+        return null;
+      }
 
-      // fallback 1: div.x1xmf6yo (story ปกติ)
-      let topBar = Array.from(document.querySelectorAll('div.x1xmf6yo'))
+      const topBar = Array.from(document.querySelectorAll('div.x1xmf6yo'))
         .find(b => b instanceof HTMLElement && b.offsetHeight > 0);
-
-      // fallback 2: progressbar (highlight)
-      if (!topBar) {
-        const pb = document.querySelector('div[role="progressbar"]');
-        if (pb) {
-          let p = pb.parentElement;
-          for (let i = 0; i < 4 && p; i++) {
-            if (p.querySelectorAll('[role="button"], button').length >= 1) { topBar = p; break; }
-            p = p.parentElement;
-          }
-        }
-      }
-
-      // fallback 3: close button
-      if (!topBar) {
-        const closeBtn = document.querySelector('div[role="button"][aria-label="Close"], svg[aria-label="Close"]');
-        if (closeBtn) {
-          let p = closeBtn;
-          for (let i = 0; i < 5 && p; i++) {
-            if (p.querySelectorAll('[role="button"], button').length >= 2) { topBar = p; break; }
-            p = p.parentElement;
-          }
-        }
-      }
-
       if (!topBar) return null;
+
+      // ถ้ามีปุ่มอยู่แล้ว + เกาะ topBar ตัวปัจจุบัน → ไม่ทำอะไร
+      const existing = document.getElementById('igStoryBtnWrap');
+      if (existing && existing.parentElement === topBar) return null;
+      // ถ้ามีปุ่มเก่าแต่เกาะ topBar อันเก่า → เอาออก
+      if (existing) existing.remove();
 
       const wrap = document.createElement('div');
       wrap.id = 'igStoryBtnWrap';
 
       const dlBtn = document.createElement('button');
-      dlBtn.className = 'igStoryBtn'; dlBtn.title = 'Download';
+      dlBtn.className = 'igStoryBtn'; dlBtn.title = 'Download video';
       dlBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
       dlBtn.addEventListener('click', (e) => { e.stopPropagation(); downloadCurrent(); });
 
       const openBtn = document.createElement('button');
-      openBtn.className = 'igStoryBtn'; openBtn.title = 'Open source URL';
+      openBtn.className = 'igStoryBtn'; openBtn.title = 'Open video URL';
       openBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
       openBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -245,40 +172,18 @@
       return wrap;
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  PATCHED: checkPage — attempts 40, poll 300ms
-    // ═══════════════════════════════════════════════════════════════════
-    let lastPath = '', pollIv = null;
-    function checkPage() {
-      const path = location.pathname;
-      if (path === lastPath) return;
-      lastPath = path;
-      document.getElementById('igStoryBtnWrap')?.remove();
-      clearInterval(pollIv);
-      pollIv = null;
-      if (!/\/stories\//.test(path)) return;
-      let attempts = 0;
-      pollIv = setInterval(() => {
-        if (injectButton() || ++attempts > 40) {
-          clearInterval(pollIv);
-          pollIv = null;
-        }
-      }, 300);
-    }
+    // poll ทุก 400ms — ใช้ได้ทั้ง story ปกติ + highlight
+    setInterval(injectButton, 400);
 
-    // ═══════════════════════════════════════════════════════════════════
-    //  PATCHED: highlight watcher — path ไม่เปลี่ยนแต่มี story UI ก็ inject
-    // ═══════════════════════════════════════════════════════════════════
-    setInterval(() => {
-      const hasStoryUI = document.querySelector('div[role="progressbar"]') !== null
-                      || document.querySelector('div.x1xmf6yo') !== null;
-      const hasBtn = document.getElementById('igStoryBtnWrap') !== null;
-      if (hasStoryUI && !hasBtn) injectButton();
-    }, 500);
+    // MutationObserver เร่งความเร็ว
+    let pending = false;
+    new MutationObserver(() => {
+      if (pending) return;
+      pending = true;
+      setTimeout(() => { pending = false; injectButton(); }, 100);
+    }).observe(document.body, { childList: true, subtree: true });
 
-    new MutationObserver(checkPage).observe(document.documentElement, { childList: true, subtree: true });
-    setInterval(checkPage, 800);
-    checkPage();
+    injectButton();
   }
 
   // ─── 3. Reels Downloader ──────────────────────────────────────────────────
@@ -1166,7 +1071,7 @@
     {
       name: icon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>') + 'AllowSave',
       type: 'toggle',
-      key: 'devg0d-ig-allowsave',
+      key: 'devg0d-ig-allsave',
       init: initIgAllowSave,
     },
     {
