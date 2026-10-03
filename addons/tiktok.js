@@ -147,7 +147,6 @@
         if (urlMatch) return urlMatch[1];
 
         const video = document.querySelector('video');
-
         if (video) {
           let p = video.parentElement;
           for (let i = 0; i < 15 && p; i++) {
@@ -185,14 +184,6 @@
           }
         }
 
-        try {
-          const uni = JSON.parse(document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__')?.textContent || '{}');
-          const scope = uni?.__DEFAULT_SCOPE__ || {};
-          const detail = scope['webapp.video-detail']?.itemInfo?.itemStruct
-                      || scope['webapp.reflow.video.detail']?.itemInfo?.itemStruct;
-          if (detail?.id) return detail.id;
-        } catch {}
-
         return null;
       }
 
@@ -213,22 +204,21 @@
           console.log('[DEV/g0d] TikWM response:', apiRes);
           if (apiRes?.code === 0 && apiRes?.data) {
             const d = apiRes.data;
-            const url = d.hdplay || d.play || d.wmplay;
-            if (url) return { url, name: (d.title || 'tiktok').slice(0, 60) };
+            let url = d.hdplay || d.play || d.wmplay;
+            if (url) {
+              // ★ patch: ถ้าเป็น SD (btag=e000b0000) → เปลี่ยนเป็น HD
+              if (!d.hdplay && /btag=e000b\d+/.test(url)) {
+                const origUrl = url;
+                url = url.replace(/btag=e000b\d+/, 'btag=e000b2000');
+                console.log('[DEV/g0d] Patched btag → e000b2000');
+                console.log('[DEV/g0d] Old URL:', origUrl.slice(0, 120));
+                console.log('[DEV/g0d] New URL:', url.slice(0, 120));
+              }
+              return { url, name: (d.title || 'tiktok').slice(0, 60) };
+            }
           }
         } catch(e) { console.warn('[DEV/g0d] TikWM failed:', e); }
       }
-
-      try {
-        const uni = JSON.parse(document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__')?.textContent || '{}');
-        const scope = uni?.__DEFAULT_SCOPE__ || {};
-        const detail = scope['webapp.video-detail']?.itemInfo?.itemStruct
-                    || scope['webapp.reflow.video.detail']?.itemInfo?.itemStruct;
-        if (detail?.video) {
-          const url = detail.video.downloadAddr || detail.video.playAddr;
-          if (url) return { url, name: (detail.desc || 'tiktok').slice(0, 60) };
-        }
-      } catch {}
 
       return null;
     }
