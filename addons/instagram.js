@@ -172,10 +172,8 @@
     window.__dgIgStoryInit = true;
 
     function getStoryUsername() {
-      // /stories/username/12345
       const parts = location.pathname.split('/').filter(Boolean);
       if (parts[0] === 'stories' && parts[1] && parts[1] !== 'highlights') return parts[1];
-      // /stories/highlights/12345
       if (parts[0] === 'stories' && parts[1] === 'highlights') return 'highlight_' + (parts[2] || '');
       return parts[0] || 'unknown';
     }
@@ -233,14 +231,12 @@
     }
 
     async function detectCurrentMedia() {
-      // ลอง API ก่อน (ถ้าไม่ใช่ highlight)
       try {
         const m = await fetchStoryMedia();
         if (m) return m;
       } catch(e) {
         console.warn('[DEV/g0d] fetchStoryMedia failed, falling back to DOM:', e);
       }
-      // DOM fallback — ใช้ได้ทั้ง story และ highlight
       return findCurrentStoryMedia();
     }
 
@@ -297,49 +293,112 @@
       return true;
     }
 
-    // ─── Story mode detection: URL เป็น /stories/ หรือมี story UI ปรากฏ ───
-    function isStoryView() {
-      if (/\/stories\//.test(location.pathname)) return true;
-      // บางที highlight เปิดใน modal โดย URL ไม่เปลี่ยน
-      // เช็คว่ามี progressbar + topBar
-      const pb = document.querySelector('div[role="progressbar"]');
-      if (pb && pb.offsetHeight > 0) return true;
+    // ── URL-based story check (ไม่ต้องรอ progressbar) ─────────────────
+    function isStoryUrl() {
+      return /\/stories\//.test(location.pathname);
+    }
+
+    // ── ดูว่ามี story UI จริง ๆ ปรากฏอยู่ไหม (progressbar / topBar) ────
+    function hasStoryUI() {
+      if (document.querySelector('div[role="progressbar"]')) return true;
+      if (document.querySelector('div.x1xmf6yo')) return true;
+      // ถ้ามี video/รูปขนาดใหญ่เต็มจอ ก็ถือว่า story UI มาแล้ว
+      const bigVideo = Array.from(document.querySelectorAll('video'))
+        .some(v => v.offsetWidth > window.innerWidth * 0.6 && v.offsetHeight > window.innerHeight * 0.6);
+      if (bigVideo) return true;
       return false;
     }
 
-    let pollIv = null;
+    // ═══════════════════════════════════════════════════════════════════
+    //  FAST INJECT: ใช้ requestAnimationFrame retry ให้เร็วที่สุด
+    // ═══════════════════════════════════════════════════════════════════
+    let rafId = null;
+    let rafStart = 0;
+    function fastInject(maxMs) {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafStart = performance.now();
+      const tick = () => {
+        if (injectButton()) { rafId = null; return; }
+        if (performance.now() - rafStart > (maxMs || 8000)) { rafId = null; return; }
+        rafId = requestAnimationFrame(tick);
+      };
+      rafId = requestAnimationFrame(tick);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  STATE: จดจำว่าเคยเห็น story UI แล้วหรือยัง
+    // ═══════════════════════════════════════════════════════════════════
+    let storyEverOpened = false;    // เคยเปิด story UI แล้วหรือยัง (ในรอบนี้)
+    let clearGraceTimer = null;     // grace timer ก่อนลบปุ่ม
+
+    function scheduleClear() {
+      // หน่วงก่อนลบปุ่ม เพื่อไม่ให้ flicker ตอนเปลี่ยน story
+      if (clearGraceTimer) return;
+      clearGraceTimer = setTimeout(() => {
+        clearGraceTimer = null;
+        // เช็คอีกที ว่าตอนนี้ยังไม่มี story UI จริง ๆ
+        if (!isStoryUrl() && !hasStoryUI()) {
+          document.getElementById('igStoryBtnWrap')?.remove();
+          storyEverOpened = false;
+        }
+      }, 800);
+    }
+
+    function cancelClear() {
+      if (clearGraceTimer) { clearTimeout(clearGraceTimer); clearGraceTimer = null; }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  MAIN CHECK
+    // ═══════════════════════════════════════════════════════════════════
     function ensureButton() {
-      if (!isStoryView()) {
-        // ออกแล้ว — เคลียร์
-        document.getElementById('igStoryBtnWrap')?.remove();
-        clearInterval(pollIv); pollIv = null;
+      const urlIsStory = isStoryUrl();
+
+      if (!urlIsStory) {
+        // URL ไม่ใช่ story — ดูว่ามี story UI โผล่ไหม (highlight modal)
+        if (hasStoryUI()) {
+          // highlight modal เปิดอยู่ — ให้ปุ่มอยู่ต่อ
+          cancelClear();
+          if (!document.getElementById('igStoryBtnWrap')) {
+            fastInject(8000);
+          }
+          return;
+        }
+        // ไม่มีอะไร → schedule clear
+        scheduleClear();
         return;
       }
-      if (!injectButton()) {
-        // ยัง inject ไม่ได้ — เริ่ม polling
-        if (!pollIv) {
-          let attempts = 0;
-          pollIv = setInterval(() => {
-            if (injectButton() || !isStoryView() || ++attempts > 40) {
-              clearInterval(pollIv); pollIv = null;
-            }
-          }, 300);
-        }
+
+      // URL เป็น /stories/ แล้ว
+      cancelClear();
+
+      if (!storyEverOpened) {
+        // เพิ่งเข้า story — เริ่ม fast inject ทันที
+        storyEverOpened = true;
+        fastInject(8000);
+      }
+
+      // ถ้าปุ่มยังไม่มี → re-trigger fast inject
+      if (!document.getElementById('igStoryBtnWrap')) {
+        fastInject(8000);
       }
     }
 
-    // poll เร็ว — เพราะ IG re-render topBar ทุกครั้งที่เปลี่ยน story
-    setInterval(ensureButton, 500);
+    // ── fallback poll (ช้ากว่า raf แต่ช่วยเคส edge) ────────────────────
+    setInterval(ensureButton, 400);
 
-    // URL change → รีเช็คทันที
-    onUrlChange(ensureButton);
+    // ── URL change → รีเช็คทันที ────────────────────────────────────────
+    onUrlChange(() => {
+      cancelClear();
+      ensureButton();
+    });
 
-    // MutationObserver
+    // ── MutationObserver (throttle) ────────────────────────────────────
     let pending = false;
     new MutationObserver(() => {
       if (pending) return;
       pending = true;
-      setTimeout(() => { pending = false; ensureButton(); }, 250);
+      setTimeout(() => { pending = false; ensureButton(); }, 150);
     }).observe(document.body, { childList: true, subtree: true });
 
     ensureButton();
