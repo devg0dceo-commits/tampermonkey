@@ -7,7 +7,6 @@
   //  SHARED HELPERS
   // ═══════════════════════════════════════════════════════════════════════
 
-  // ─── URL change detection (SPA-safe) ──────────────────────────────────
   const urlChangeCallbacks = [];
   function onUrlChange(fn) { urlChangeCallbacks.push(fn); }
   let __dgLastUrl = location.href;
@@ -16,7 +15,6 @@
     __dgLastUrl = location.href;
     urlChangeCallbacks.forEach(fn => { try { fn(); } catch (e) { console.error('[DEV/g0d]', e); } });
   }
-  // hook pushState/replaceState
   ;['pushState', 'replaceState'].forEach(m => {
     const orig = history[m];
     history[m] = function () {
@@ -26,10 +24,8 @@
     };
   });
   window.addEventListener('popstate', () => setTimeout(fireUrlChange, 0));
-  // poll fallback (เผื่อ IG เปลี่ยน URL ผ่านวิธีอื่น)
   setInterval(fireUrlChange, 400);
 
-  // ─── ShieldBypass (คลิกปุ่มไม่ให้ IG แย่ง) ───────────────────────────────
   ;['mousedown', 'mouseup', 'click'].forEach(type => {
     window.addEventListener(type, (e) => {
       if (!e.isTrusted) return;
@@ -69,7 +65,6 @@
     } catch(e) { window.open(url, '_blank'); }
   }
 
-  // ─── React fiber: ดึง video URL จริง (ใช้ร่วมหลาย plugin) ─────────────
   function getVideoRealUrl(video) {
     const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
     if (!fiberKey) return null;
@@ -112,10 +107,7 @@
     return null;
   }
 
-  // ─── หา media URL ปัจจุบันของ story ─────────────────────────────────────
-  // ใช้ร่วมกับ story + highlight
   function findCurrentStoryMedia() {
-    // 1) video ที่มองเห็นได้
     const videos = Array.from(document.querySelectorAll('video'))
       .filter(v => v.offsetWidth > 100 && v.offsetHeight > 100)
       .sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight));
@@ -123,7 +115,6 @@
       const url = getVideoRealUrl(videos[0]);
       if (url) return { url, ext: 'mp4' };
     }
-    // 2) img ขนาดใหญ่
     const imgs = Array.from(document.querySelectorAll('img'))
       .filter(i => i.offsetWidth > 200 && i.naturalWidth > 400 && i.src && i.src.includes('cdninstagram'))
       .sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight));
@@ -131,14 +122,11 @@
     return null;
   }
 
-  // ─── หา topBar ของ story/highlight (หลาย fallback) ───────────────────────
   function findStoryTopBar() {
-    // 1) IG story ปกติ — div.x1xmf6yo
     let bar = Array.from(document.querySelectorAll('div.x1xmf6yo'))
       .find(b => b instanceof HTMLElement && b.offsetHeight > 0);
     if (bar) return bar;
 
-    // 2) หาจาก progress bar (div ที่มีลูกเป็น progress segments)
     const progressBar = document.querySelector('div[role="progressbar"]')
       || Array.from(document.querySelectorAll('div')).find(d =>
         d.querySelectorAll(':scope > div > div').length > 3 &&
@@ -152,7 +140,6 @@
       }
     }
 
-    // 3) หาจากปุ่ม close
     const closeBtn = document.querySelector('div[role="button"][aria-label="Close"], svg[aria-label="Close"]');
     if (closeBtn) {
       let p = closeBtn;
@@ -165,7 +152,7 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  //  PLUGIN 1: StorySaver (+ Highlight)
+  //  PLUGIN 1: StorySaver (+ Highlight) — [PATCHED]
   // ═══════════════════════════════════════════════════════════════════════
   function initIgStorySaver() {
     if (window.__dgIgStoryInit) return;
@@ -293,119 +280,56 @@
       return true;
     }
 
-    // ── URL-based story check (ไม่ต้องรอ progressbar) ─────────────────
-    function isStoryUrl() {
-      return /\/stories\//.test(location.pathname);
-    }
-
-    // ── ดูว่ามี story UI จริง ๆ ปรากฏอยู่ไหม (progressbar / topBar) ────
-    function hasStoryUI() {
-      if (document.querySelector('div[role="progressbar"]')) return true;
-      if (document.querySelector('div.x1xmf6yo')) return true;
-      // ถ้ามี video/รูปขนาดใหญ่เต็มจอ ก็ถือว่า story UI มาแล้ว
-      const bigVideo = Array.from(document.querySelectorAll('video'))
-        .some(v => v.offsetWidth > window.innerWidth * 0.6 && v.offsetHeight > window.innerHeight * 0.6);
-      if (bigVideo) return true;
+    function isStoryView() {
+      if (/\/stories\//.test(location.pathname)) return true;
+      // highlight modal — URL ยังเป็น /username/ แต่มี progressbar
+      const pb = document.querySelector('div[role="progressbar"]');
+      if (pb && pb.offsetHeight > 0) return true;
       return false;
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  FAST INJECT: ใช้ requestAnimationFrame retry ให้เร็วที่สุด
+    //  PATCH: อย่า reset pollIv ถ้ามันยังทำงานอยู่ + attempts 60
     // ═══════════════════════════════════════════════════════════════════
-    let rafId = null;
-    let rafStart = 0;
-    function fastInject(maxMs) {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafStart = performance.now();
-      const tick = () => {
-        if (injectButton()) { rafId = null; return; }
-        if (performance.now() - rafStart > (maxMs || 8000)) { rafId = null; return; }
-        rafId = requestAnimationFrame(tick);
-      };
-      rafId = requestAnimationFrame(tick);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    //  STATE: จดจำว่าเคยเห็น story UI แล้วหรือยัง
-    // ═══════════════════════════════════════════════════════════════════
-    let storyEverOpened = false;    // เคยเปิด story UI แล้วหรือยัง (ในรอบนี้)
-    let clearGraceTimer = null;     // grace timer ก่อนลบปุ่ม
-
-    function scheduleClear() {
-      // หน่วงก่อนลบปุ่ม เพื่อไม่ให้ flicker ตอนเปลี่ยน story
-      if (clearGraceTimer) return;
-      clearGraceTimer = setTimeout(() => {
-        clearGraceTimer = null;
-        // เช็คอีกที ว่าตอนนี้ยังไม่มี story UI จริง ๆ
-        if (!isStoryUrl() && !hasStoryUI()) {
-          document.getElementById('igStoryBtnWrap')?.remove();
-          storyEverOpened = false;
-        }
-      }, 800);
-    }
-
-    function cancelClear() {
-      if (clearGraceTimer) { clearTimeout(clearGraceTimer); clearGraceTimer = null; }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    //  MAIN CHECK
-    // ═══════════════════════════════════════════════════════════════════
+    let pollIv = null;
     function ensureButton() {
-      const urlIsStory = isStoryUrl();
-
-      if (!urlIsStory) {
-        // URL ไม่ใช่ story — ดูว่ามี story UI โผล่ไหม (highlight modal)
-        if (hasStoryUI()) {
-          // highlight modal เปิดอยู่ — ให้ปุ่มอยู่ต่อ
-          cancelClear();
-          if (!document.getElementById('igStoryBtnWrap')) {
-            fastInject(8000);
-          }
-          return;
-        }
-        // ไม่มีอะไร → schedule clear
-        scheduleClear();
+      if (!isStoryView()) {
+        // ออกแล้ว — เคลียร์
+        if (pollIv) { clearInterval(pollIv); pollIv = null; }
+        document.getElementById('igStoryBtnWrap')?.remove();
         return;
       }
 
-      // URL เป็น /stories/ แล้ว
-      cancelClear();
+      // ถ้าปุ่มมีอยู่แล้ว — ไม่ต้องทำอะไร
+      if (document.getElementById('igStoryBtnWrap')) return;
 
-      if (!storyEverOpened) {
-        // เพิ่งเข้า story — เริ่ม fast inject ทันที
-        storyEverOpened = true;
-        fastInject(8000);
-      }
+      // PATCH: ถ้า pollIv ยังทำงานอยู่ ไม่ต้องสร้างใหม่ (กัน reset กลางทาง)
+      if (pollIv) return;
 
-      // ถ้าปุ่มยังไม่มี → re-trigger fast inject
-      if (!document.getElementById('igStoryBtnWrap')) {
-        fastInject(8000);
-      }
+      let attempts = 0;
+      pollIv = setInterval(() => {
+        if (injectButton() || !isStoryView() || ++attempts > 60) {
+          clearInterval(pollIv);
+          pollIv = null;
+        }
+      }, 250);
     }
 
-    // ── fallback poll (ช้ากว่า raf แต่ช่วยเคส edge) ────────────────────
-    setInterval(ensureButton, 400);
+    setInterval(ensureButton, 500);
+    onUrlChange(ensureButton);
 
-    // ── URL change → รีเช็คทันที ────────────────────────────────────────
-    onUrlChange(() => {
-      cancelClear();
-      ensureButton();
-    });
-
-    // ── MutationObserver (throttle) ────────────────────────────────────
     let pending = false;
     new MutationObserver(() => {
       if (pending) return;
       pending = true;
-      setTimeout(() => { pending = false; ensureButton(); }, 150);
+      setTimeout(() => { pending = false; ensureButton(); }, 250);
     }).observe(document.body, { childList: true, subtree: true });
 
     ensureButton();
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  //  PLUGIN 2: Content Downloader (feed posts + video page)
+  //  PLUGIN 2: Content Downloader
   // ═══════════════════════════════════════════════════════════════════════
   function initIgContentDownloader() {
     if (window.__dgIgContentInit) return;
@@ -417,7 +341,6 @@
         const m = a.href.match(/\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
         if (m) return m[2];
       }
-      // fallback: URL เอง
       const m = location.pathname.match(/\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
       return m ? m[2] : null;
     }
@@ -620,7 +543,6 @@
       insertEl.appendChild(wrap);
     }
 
-    // ─── Video page: /p/, /reel/, /reels/, /tv/ ──────────────────────
     function isSinglePostPage() {
       return /^\/(p|reel|reels|tv)\//.test(location.pathname);
     }
@@ -629,7 +551,6 @@
       if (!isSinglePostPage()) return;
       if (document.querySelector('.dg-single-post-wrap')) return;
 
-      // หา container หลักของ post — เอา video หรือ img ใหญ่มาเป็น anchor
       const video = Array.from(document.querySelectorAll('video'))
         .filter(v => v.offsetWidth > 200 && v.offsetHeight > 200)
         .sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight))[0];
@@ -639,7 +560,6 @@
       const anchor = video || img;
       if (!anchor) return;
 
-      // หา wrapper ที่ position ได้
       let container = anchor.parentElement;
       for (let i = 0; i < 4 && container; i++) {
         if (container.offsetWidth > 300 && container.offsetHeight > 300) break;
@@ -653,7 +573,6 @@
       wrap.style.top = '12px';
       wrap.style.right = '12px';
 
-      // สำหรับ single post: ใช้ article = container, shortcode = URL
       const fakeArticle = container;
       fakeArticle.setAttribute('data-dg-shortcode-page', '1');
 
@@ -675,7 +594,6 @@
       container.appendChild(wrap);
     }
 
-    // ─── Feed scan (article) ──────────────────────────────────────────
     function scanFeed() {
       document.querySelectorAll('article:not([data-dg-feed])').forEach(el => {
         if (el.offsetHeight > 0 && el.offsetWidth > 0) injectFeedButtons(el);
@@ -687,7 +605,6 @@
       injectSinglePostButtons();
     }
 
-    // scan เร็วขึ้น + ใช้ IntersectionObserver
     setInterval(scanAll, 600);
 
     let pending = false;
@@ -697,14 +614,12 @@
       setTimeout(() => { pending = false; scanAll(); }, 250);
     }).observe(document.body, { childList: true, subtree: true });
 
-    // scroll → scan
     let scrollTimer = null;
     window.addEventListener('scroll', () => {
       clearTimeout(scrollTimer);
       scrollTimer = setTimeout(scanAll, 200);
     }, { passive: true });
 
-    // URL change → ล้างปุ่มเก่า + scan ใหม่
     onUrlChange(() => {
       document.querySelectorAll('.dg-single-post-wrap').forEach(el => el.remove());
       setTimeout(scanAll, 300);
@@ -822,7 +737,6 @@
     }
 
     function findReelContainer() {
-      // เดิม: div[aria-busy][tabindex] > div
       let candidates = Array.from(document.querySelectorAll('div[aria-busy][tabindex] > div'));
       let found = candidates.find(el =>
         el.offsetWidth > window.innerWidth * 0.7 &&
@@ -831,7 +745,6 @@
       );
       if (found) return found;
 
-      // fallback: หา video ใหญ่อยู่กลางจอ แล้วขึ้นไป 3-5 ชั้น
       const video = Array.from(document.querySelectorAll('video'))
         .filter(v => v.offsetWidth > window.innerWidth * 0.4 && v.offsetHeight > window.innerHeight * 0.5)
         .sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight))[0];
@@ -993,7 +906,6 @@
       if (!header) return false;
       if (/^\/(explore|stories|direct|accounts)\b/.test(location.pathname)) return false;
       if (/^\/(p|reel|reels|tv)\//.test(location.pathname)) return false;
-      // profile URL pattern: /username/ หรือ /username/tagged
       return /^\/[0-9A-Za-z._]+\/?(tagged|reels|saved)?\/?$/i.test(location.pathname);
     }
 
