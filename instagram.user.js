@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DEV/g0d Instagram
 // @namespace    FREELOADING
-// @version      2.2
+// @version      2.3
 // @description  DEV/g0d - Instagram tools
 // @author       DEV/g0d
 // @license      MIT
@@ -13,13 +13,13 @@
 // @grant        GM_download
 // @downloadURL  https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/instagram.user.js
 // @updateURL    https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/instagram.user.js
-// @require      https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/refs/heads/main/addons/instagram.js
+// @require      https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/refs/heads/main/addons/instagram.js?v=23
 // @run-at       document-body
 // ==/UserScript==
 
 (function () {
   'use strict';
-  // if (window.self !== window.top) return;
+  // if (window.self !== window.top) return; // disabled — IG may render in iframe
 
   const getKey = (k) => localStorage.getItem(k) !== 'false';
   const setKey = (k, v) => localStorage.setItem(k, v ? 'true' : 'false');
@@ -75,9 +75,9 @@
     .dg-ig-sw input:checked+span:before { transform:translateX(16px) !important; background:#fff !important; }
   `);
 
-  function buildUI() {
-    const plugins = window.DEVg0d_PLUGINS || [];
+  const plugins = window.DEVg0d_PLUGINS || [];
 
+  function init() {
     const tab = document.createElement('div');
     tab.id = 'dg-ig-tab';
     tab.textContent = L ? '›' : '‹';
@@ -111,7 +111,7 @@
       input.onchange = (e) => {
         e.stopPropagation();
         setKey(p.key, input.checked);
-        alert(`"${p.name.replace(/<[^>]+>/g, '')}" ${input.checked?'enabled':'disabled'} — reload to apply.`);
+        alert(`"${p.name}" ${input.checked?'enabled':'disabled'} — reload to apply.`);
       };
     });
 
@@ -121,26 +121,7 @@
     });
   }
 
-  function whenReady(fn) {
-    if (window.__dgPluginsReady) { fn(); return; }
-    window.addEventListener('dg-plugins-ready', fn, { once: true });
-    let tries = 0;
-    const iv = setInterval(() => {
-      if (window.__dgPluginsReady) {
-        clearInterval(iv);
-        window.removeEventListener('dg-plugins-ready', fn);
-        fn();
-      } else if (++tries > 100) {
-        clearInterval(iv);
-        console.warn('[DEV/g0d] plugins not loaded');
-        fn();
-      }
-    }, 100);
-  }
-
-  whenReady(() => {
-    if (document.body) buildUI();
-    else document.addEventListener('DOMContentLoaded', buildUI);
-  });
+  if (document.body) init();
+  else document.addEventListener('DOMContentLoaded', init);
 
 })();
