@@ -1,14 +1,39 @@
 // DEV/g0d - Instagram Addon
 
 (function () {
+  'use strict';
 
-  // ─── Shared helpers ───────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+  //  SHARED HELPERS
+  // ═══════════════════════════════════════════════════════════════════════
 
-  // ShieldBypass: intercept clicks before IG overlay (same as Instagram_Video_Controls)
-  ;['mousedown','mouseup','click'].forEach(type => {
+  // ─── URL change detection (SPA-safe) ──────────────────────────────────
+  const urlChangeCallbacks = [];
+  function onUrlChange(fn) { urlChangeCallbacks.push(fn); }
+  let __dgLastUrl = location.href;
+  function fireUrlChange() {
+    if (location.href === __dgLastUrl) return;
+    __dgLastUrl = location.href;
+    urlChangeCallbacks.forEach(fn => { try { fn(); } catch (e) { console.error('[DEV/g0d]', e); } });
+  }
+  // hook pushState/replaceState
+  ;['pushState', 'replaceState'].forEach(m => {
+    const orig = history[m];
+    history[m] = function () {
+      const r = orig.apply(this, arguments);
+      setTimeout(fireUrlChange, 0);
+      return r;
+    };
+  });
+  window.addEventListener('popstate', () => setTimeout(fireUrlChange, 0));
+  // poll fallback (เผื่อ IG เปลี่ยน URL ผ่านวิธีอื่น)
+  setInterval(fireUrlChange, 400);
+
+  // ─── ShieldBypass (คลิกปุ่มไม่ให้ IG แย่ง) ───────────────────────────────
+  ;['mousedown', 'mouseup', 'click'].forEach(type => {
     window.addEventListener(type, (e) => {
       if (!e.isTrusted) return;
-      const els = document.querySelectorAll('.dg-feed-wrap button, .dg-reel-wrap button');
+      const els = document.querySelectorAll('.dg-feed-wrap button, .dg-reel-wrap button, .igStoryBtn');
       for (const el of els) {
         const r = el.getBoundingClientRect();
         if (r.width === 0 || r.height === 0) continue;
@@ -21,6 +46,7 @@
       }
     }, true);
   });
+
   function getAppID() {
     for (const s of document.querySelectorAll('script[type="application/json"]')) {
       const m = s.textContent.match(/"APP_ID":"(\d+)"/i); if (m) return m[1];
@@ -43,70 +69,132 @@
     } catch(e) { window.open(url, '_blank'); }
   }
 
-  // ─── 1. Story Downloader ──────────────────────────────────────────────────
-  function initIgStorySaver() {
+  // ─── React fiber: ดึง video URL จริง (ใช้ร่วมหลาย plugin) ─────────────
+  function getVideoRealUrl(video) {
+    const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
+    if (!fiberKey) return null;
+    try {
+      let fiber = video[fiberKey];
+      for (let i = 0; i < 30 && fiber; i++) {
+        const props = fiber.memoizedProps || fiber.pendingProps;
+        if (props) {
+          const impl = props.implementations
+            ?? props.children?.[0]?.props?.children?.props?.implementations
+            ?? props.children?.props?.children?.props?.implementations;
+          if (impl) {
+            for (const idx of [1, 0, 2]) {
+              const s = impl[idx]?.data;
+              const u = s?.hdSrc || s?.sdSrc || s?.hd_src || s?.sd_src;
+              if (u) return u;
+            }
+          }
+          if (props.src && !props.src.startsWith('blob:')) return props.src;
+          const vd = props.videoData;
+          if (vd) { const u = vd.hd_src || vd.sd_src || vd.$1?.hd_src || vd.$1?.sd_src; if (u) return u; }
+        }
+        fiber = fiber.return;
+      }
+    } catch(e) {}
+    const propsKey = fiberKey.replace('__reactFiber', '__reactProps');
+    let el = video;
+    for (let i = 0; i < 8; i++) {
+      el = el.parentElement; if (!el) break;
+      const p = el[propsKey]; if (!p) continue;
+      const impl = p.children?.[0]?.props?.children?.props?.implementations ?? p.children?.props?.children?.props?.implementations;
+      if (impl) {
+        for (const idx of [1, 0, 2]) {
+          const s = impl[idx]?.data;
+          const u = s?.hdSrc || s?.sdSrc || s?.hd_src || s?.sd_src;
+          if (u) return u;
+        }
+      }
+    }
+    return null;
+  }
 
-    function getStoryUsername() {
-      return location.pathname.split('/').filter(s => s.length > 0).at(1);
+  // ─── หา media URL ปัจจุบันของ story ─────────────────────────────────────
+  // ใช้ร่วมกับ story + highlight
+  function findCurrentStoryMedia() {
+    // 1) video ที่มองเห็นได้
+    const videos = Array.from(document.querySelectorAll('video'))
+      .filter(v => v.offsetWidth > 100 && v.offsetHeight > 100)
+      .sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight));
+    if (videos[0]) {
+      const url = getVideoRealUrl(videos[0]);
+      if (url) return { url, ext: 'mp4' };
+    }
+    // 2) img ขนาดใหญ่
+    const imgs = Array.from(document.querySelectorAll('img'))
+      .filter(i => i.offsetWidth > 200 && i.naturalWidth > 400 && i.src && i.src.includes('cdninstagram'))
+      .sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight));
+    if (imgs[0]) return { url: imgs[0].src, ext: 'jpg' };
+    return null;
+  }
+
+  // ─── หา topBar ของ story/highlight (หลาย fallback) ───────────────────────
+  function findStoryTopBar() {
+    // 1) IG story ปกติ — div.x1xmf6yo
+    let bar = Array.from(document.querySelectorAll('div.x1xmf6yo'))
+      .find(b => b instanceof HTMLElement && b.offsetHeight > 0);
+    if (bar) return bar;
+
+    // 2) หาจาก progress bar (div ที่มีลูกเป็น progress segments)
+    const progressBar = document.querySelector('div[role="progressbar"]')
+      || Array.from(document.querySelectorAll('div')).find(d =>
+        d.querySelectorAll(':scope > div > div').length > 3 &&
+        d.offsetHeight > 0 && d.offsetHeight < 20
+      );
+    if (progressBar) {
+      let p = progressBar.parentElement;
+      for (let i = 0; i < 3 && p; i++) {
+        if (p.querySelectorAll('[role="button"], button').length >= 1) return p;
+        p = p.parentElement;
+      }
     }
 
-    function getStoryUrlId() {
-      return location.pathname.split('/').filter(s => /^[0-9]{10,}$/.test(s)).at(-1);
+    // 3) หาจากปุ่ม close
+    const closeBtn = document.querySelector('div[role="button"][aria-label="Close"], svg[aria-label="Close"]');
+    if (closeBtn) {
+      let p = closeBtn;
+      for (let i = 0; i < 5 && p; i++) {
+        if (p.querySelectorAll('[role="button"], button').length >= 2) return p;
+        p = p.parentElement;
+      }
+    }
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PLUGIN 1: StorySaver (+ Highlight)
+  // ═══════════════════════════════════════════════════════════════════════
+  function initIgStorySaver() {
+    if (window.__dgIgStoryInit) return;
+    window.__dgIgStoryInit = true;
+
+    function getStoryUsername() {
+      // /stories/username/12345
+      const parts = location.pathname.split('/').filter(Boolean);
+      if (parts[0] === 'stories' && parts[1] && parts[1] !== 'highlights') return parts[1];
+      // /stories/highlights/12345
+      if (parts[0] === 'stories' && parts[1] === 'highlights') return 'highlight_' + (parts[2] || '');
+      return parts[0] || 'unknown';
+    }
+
+    function getStoryId() {
+      const parts = location.pathname.split('/').filter(Boolean);
+      return parts.at(-1);
     }
 
     function getStoryProgressIndex() {
-      const bars = document.querySelectorAll('div.x1xmf6yo > div');
+      const bars = document.querySelectorAll('div[role="progressbar"] > div, div.x1xmf6yo > div');
       let idx = 0;
       bars.forEach((bar, i) => { if (bar.children.length > 0) idx = i; });
       return idx;
     }
 
-    // exact same as ig-story-test.user.js
-    function getVideoRealUrl(video) {
-      const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
-      if (!fiberKey) return null;
-      try {
-        let fiber = video[fiberKey];
-        for (let i = 0; i < 30 && fiber; i++) {
-          const props = fiber.memoizedProps || fiber.pendingProps;
-          if (props) {
-            const impl = props.implementations
-              ?? props.children?.[0]?.props?.children?.props?.implementations
-              ?? props.children?.props?.children?.props?.implementations;
-            if (impl) {
-              for (const idx of [1, 0, 2]) {
-                const s = impl[idx]?.data;
-                const u = s?.hdSrc || s?.sdSrc || s?.hd_src || s?.sd_src;
-                if (u) return u;
-              }
-            }
-            if (props.src && !props.src.startsWith('blob:')) return props.src;
-            const vd = props.videoData;
-            if (vd) { const u = vd.hd_src || vd.sd_src || vd.$1?.hd_src || vd.$1?.sd_src; if (u) return u; }
-          }
-          fiber = fiber.return;
-        }
-      } catch(e) {}
-      const propsKey = fiberKey.replace('__reactFiber', '__reactProps');
-      let el = video;
-      for (let i = 0; i < 8; i++) {
-        el = el.parentElement; if (!el) break;
-        const p = el[propsKey]; if (!p) continue;
-        const impl = p.children?.[0]?.props?.children?.props?.implementations ?? p.children?.props?.children?.props?.implementations;
-        if (impl) {
-          for (const idx of [1, 0, 2]) {
-            const s = impl[idx]?.data;
-            const u = s?.hdSrc || s?.sdSrc || s?.hd_src || s?.sd_src;
-            if (u) return u;
-          }
-        }
-      }
-      return null;
-    }
-
     async function fetchStoryMedia() {
       const username = getStoryUsername();
-      if (!username) return null;
+      if (!username || username.startsWith('highlight_')) return null;
 
       const userRes = await new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
@@ -133,7 +221,7 @@
       const items = storiesRes?.data?.reels_media?.[0]?.items;
       if (!items?.length) return null;
 
-      const urlId = getStoryUrlId();
+      const urlId = getStoryId();
       let item = urlId ? items.find(i => i.id == urlId) : null;
       if (!item) { const idx = getStoryProgressIndex(); item = items[idx] || items[0]; }
       if (!item) return null;
@@ -145,20 +233,15 @@
     }
 
     async function detectCurrentMedia() {
-      try { const m = await fetchStoryMedia(); if (m) return m; } catch(e) {
+      // ลอง API ก่อน (ถ้าไม่ใช่ highlight)
+      try {
+        const m = await fetchStoryMedia();
+        if (m) return m;
+      } catch(e) {
         console.warn('[DEV/g0d] fetchStoryMedia failed, falling back to DOM:', e);
       }
-      // DOM fallback (ighelper pattern)
-      const video = document.querySelector('body > div section video[playsinline]');
-      if (video) { const url = getVideoRealUrl(video); if (url) return { url, ext: 'mp4' }; }
-      const imgEl = document.querySelector('body > div section img[referrerpolicy][class]')
-                 || document.querySelector('body > div section img._aa63');
-      if (imgEl) {
-        const srcset = imgEl.getAttribute('srcset');
-        const url = srcset ? srcset.split(',')[0].split(' ')[0] : imgEl.src;
-        if (url) return { url, ext: 'jpg' };
-      }
-      return null;
+      // DOM fallback — ใช้ได้ทั้ง story และ highlight
+      return findCurrentStoryMedia();
     }
 
     async function downloadCurrent() {
@@ -188,10 +271,9 @@
     document.head.appendChild(style);
 
     function injectButton() {
-      if (document.getElementById('igStoryBtnWrap')) return null;
-      const topBar = Array.from(document.querySelectorAll('div.x1xmf6yo'))
-        .find(b => b instanceof HTMLElement && b.offsetHeight > 0);
-      if (!topBar) return null;
+      if (document.getElementById('igStoryBtnWrap')) return true;
+      const topBar = findStoryTopBar();
+      if (!topBar) return false;
 
       const wrap = document.createElement('div');
       wrap.id = 'igStoryBtnWrap';
@@ -212,35 +294,376 @@
 
       wrap.append(dlBtn, openBtn);
       topBar.appendChild(wrap);
-      return wrap;
+      return true;
     }
 
-    let lastPath = '', pollIv = null;
-    function checkPage() {
-      const path = location.pathname;
-      if (path === lastPath) return;
-      lastPath = path;
-      document.getElementById('igStoryBtnWrap')?.remove();
-      clearInterval(pollIv);
-      if (!/\/stories\//.test(path)) return;
-      let attempts = 0;
-      pollIv = setInterval(() => {
-        if (injectButton() || ++attempts > 20) clearInterval(pollIv);
-      }, 500);
+    // ─── Story mode detection: URL เป็น /stories/ หรือมี story UI ปรากฏ ───
+    function isStoryView() {
+      if (/\/stories\//.test(location.pathname)) return true;
+      // บางที highlight เปิดใน modal โดย URL ไม่เปลี่ยน
+      // เช็คว่ามี progressbar + topBar
+      const pb = document.querySelector('div[role="progressbar"]');
+      if (pb && pb.offsetHeight > 0) return true;
+      return false;
     }
 
-    new MutationObserver(checkPage).observe(document.documentElement, { childList: true, subtree: true });
-    setInterval(checkPage, 800);
-    checkPage();
+    let pollIv = null;
+    function ensureButton() {
+      if (!isStoryView()) {
+        // ออกแล้ว — เคลียร์
+        document.getElementById('igStoryBtnWrap')?.remove();
+        clearInterval(pollIv); pollIv = null;
+        return;
+      }
+      if (!injectButton()) {
+        // ยัง inject ไม่ได้ — เริ่ม polling
+        if (!pollIv) {
+          let attempts = 0;
+          pollIv = setInterval(() => {
+            if (injectButton() || !isStoryView() || ++attempts > 40) {
+              clearInterval(pollIv); pollIv = null;
+            }
+          }, 300);
+        }
+      }
+    }
+
+    // poll เร็ว — เพราะ IG re-render topBar ทุกครั้งที่เปลี่ยน story
+    setInterval(ensureButton, 500);
+
+    // URL change → รีเช็คทันที
+    onUrlChange(ensureButton);
+
+    // MutationObserver
+    let pending = false;
+    new MutationObserver(() => {
+      if (pending) return;
+      pending = true;
+      setTimeout(() => { pending = false; ensureButton(); }, 250);
+    }).observe(document.body, { childList: true, subtree: true });
+
+    ensureButton();
   }
 
-  // ─── 3. Reels Downloader ──────────────────────────────────────────────────
-  function initIgReelsDownloader() {
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PLUGIN 2: Content Downloader (feed posts + video page)
+  // ═══════════════════════════════════════════════════════════════════════
+  function initIgContentDownloader() {
+    if (window.__dgIgContentInit) return;
+    window.__dgIgContentInit = true;
+
+    function getShortcode(article) {
+      if (!article) return null;
+      for (const a of article.querySelectorAll('a[href]')) {
+        const m = a.href.match(/\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
+        if (m) return m[2];
+      }
+      // fallback: URL เอง
+      const m = location.pathname.match(/\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
+      return m ? m[2] : null;
+    }
+
+    function fetchMediaByShortcode(shortcode) {
+      return new Promise((resolve, reject) => {
+        const url = `https://www.instagram.com/graphql/query/?query_hash=2c4c2e343a8f64c625ba02b2aa12c7f8&variables=%7B%22shortcode%22:%22${shortcode}%22%7D`;
+        GM_xmlhttpRequest({
+          method: 'GET', url,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Pixel 7 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36 Instagram 307.0.0.34.111' },
+          onload: res => {
+            try {
+              const obj = JSON.parse(res.responseText);
+              if (obj.status === 'fail') { reject('fail'); return; }
+              resolve(obj.data?.shortcode_media ?? obj.data);
+            } catch(e) { reject(e); }
+          },
+          onerror: reject,
+        });
+      });
+    }
+
+    function fetchMediaByQueryID(shortcode) {
+      return new Promise((resolve, reject) => {
+        const url = `https://www.instagram.com/graphql/query/?query_id=9496392173716084&variables={%22shortcode%22:%22${shortcode}%22,%22__relay_internal__pv__PolarisFeedShareMenurelayprovider%22:true,%22__relay_internal__pv__PolarisIsLoggedInrelayprovider%22:true}`;
+        GM_xmlhttpRequest({
+          method: 'GET', url,
+          onload: res => {
+            try {
+              const obj = JSON.parse(res.responseText);
+              const item = obj.data?.xdt_api__v1__media__shortcode__web_info?.items?.[0];
+              resolve(item);
+            } catch(e) { reject(e); }
+          },
+          onerror: reject,
+        });
+      });
+    }
+
+    function getCarouselIndex(article) {
+      const hasBackButton = article.querySelector('button[aria-label*="Go back"], button._afxv, button[class*="back"]') !== null
+        || (() => {
+          const btns = article.querySelectorAll('button');
+          for (const b of btns) {
+            const rect = b.getBoundingClientRect();
+            const articleRect = article.getBoundingClientRect();
+            if (rect.width > 0 && rect.left < articleRect.left + articleRect.width * 0.2) return true;
+          }
+          return false;
+        })();
+
+      if (!hasBackButton) return 0;
+
+      const ul = article.querySelector('ul[class]');
+      if (!ul) return 0;
+
+      const viewport = ul.parentElement?.parentElement;
+      if (!viewport) return 0;
+
+      const viewportRect = viewport.getBoundingClientRect();
+      const itemWidth = viewportRect.width;
+      if (itemWidth === 0) return 0;
+
+      const slides = article.querySelectorAll('li[class]');
+      let closestSlide = null;
+      let minDistance = Infinity;
+
+      for (const slide of slides) {
+        const rect = slide.getBoundingClientRect();
+        if (rect.width === 0) continue;
+        const distance = Math.abs(rect.right - viewportRect.right);
+        if (distance < minDistance) { minDistance = distance; closestSlide = slide; }
+      }
+
+      if (!closestSlide) return 0;
+
+      const style = closestSlide.getAttribute('style') || '';
+      const match = style.match(/translateX\(([^p]+)px\)/);
+      if (match) {
+        const totalOffset = parseFloat(match[1]);
+        return Math.round(totalOffset / itemWidth);
+      }
+      return 0;
+    }
+
+    async function downloadFeedMedia(src, article) {
+      const shortcode = getShortcode(article);
+      const idx = getCarouselIndex(article);
+
+      if (shortcode) {
+        try {
+          let media = await fetchMediaByShortcode(shortcode).catch(() => null);
+          if (media) {
+            if (media.video_url && idx === 0) { triggerDownload(media.video_url, 'mp4'); return; }
+            if (media.edge_sidecar_to_children) {
+              const items = media.edge_sidecar_to_children.edges.map(e => e.node);
+              const item = items[idx] ?? items[0];
+              if (item.video_url) { triggerDownload(item.video_url, 'mp4'); return; }
+              if (item.display_url) { triggerDownload(item.display_url, 'jpg'); return; }
+            }
+            const imgUrl = media.display_resources?.at(-1)?.src || media.display_url;
+            if (imgUrl) { triggerDownload(imgUrl, 'jpg'); return; }
+          }
+          const item = await fetchMediaByQueryID(shortcode).catch(() => null);
+          if (item) {
+            if (item.carousel_media?.length) {
+              const slide = item.carousel_media[idx] ?? item.carousel_media[0];
+              if (slide.video_versions?.length) { triggerDownload(slide.video_versions[0].url, 'mp4'); return; }
+              if (slide.image_versions2?.candidates?.length) { triggerDownload(slide.image_versions2.candidates[0].url, 'jpg'); return; }
+            }
+            if (item.video_versions?.length) { triggerDownload(item.video_versions[0].url, 'mp4'); return; }
+            if (item.image_versions2?.candidates?.length) { triggerDownload(item.image_versions2.candidates[0].url, 'jpg'); return; }
+          }
+        } catch(e) { console.error('[DEV/g0d] fetchMedia error:', e); }
+      }
+      if (src && !src.startsWith('blob:')) { triggerDownload(src, 'jpg'); return; }
+      const video = article?.querySelector('video');
+      if (video) { const url = getVideoRealUrl(video); if (url) { triggerDownload(url, 'mp4'); return; } }
+      console.warn('[DEV/g0d] Could not get media URL');
+    }
+
+    async function openFeedMedia(article) {
+      const shortcode = getShortcode(article);
+      const idx = getCarouselIndex(article);
+      if (!shortcode) return;
+      try {
+        let media = await fetchMediaByShortcode(shortcode).catch(() => null);
+        if (media?.edge_sidecar_to_children) {
+          const items = media.edge_sidecar_to_children.edges.map(e => e.node);
+          const item = items[idx] ?? items[0];
+          window.open(item?.video_url || item?.display_url, '_blank'); return;
+        }
+        if (media?.video_url) { window.open(media.video_url, '_blank'); return; }
+        if (media?.display_url) { window.open(media.display_url, '_blank'); return; }
+        const item = await fetchMediaByQueryID(shortcode).catch(() => null);
+        if (item?.carousel_media?.length) {
+          const slide = item.carousel_media[idx] ?? item.carousel_media[0];
+          window.open(slide?.video_versions?.[0]?.url || slide?.image_versions2?.candidates?.[0]?.url, '_blank'); return;
+        }
+        if (item?.video_versions?.[0]?.url) { window.open(item.video_versions[0].url, '_blank'); return; }
+        if (item?.image_versions2?.candidates?.[0]?.url) { window.open(item.image_versions2.candidates[0].url, '_blank'); return; }
+      } catch(e) { console.error('[DEV/g0d] openFeedMedia error:', e); }
+    }
 
     const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
     const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
 
-    // exact same as ig-story-test.user.js
+    const style = document.createElement('style');
+    style.textContent = `
+      .dg-btn-wrap{position:absolute;top:12px;right:12px;display:flex;flex-flow:row-reverse;gap:2px;z-index:9999;line-height:0}
+      .dg-btn-wrap button{
+        width:36px;height:36px;border-radius:50%;
+        background:transparent;border:none;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;
+        color:white;padding:0;
+        transition:opacity .2s;
+        filter:drop-shadow(0 1px 3px rgba(0,0,0,0.5));
+      }
+      .dg-btn-wrap button:hover{opacity:.7}
+      .dg-btn-wrap button svg{width:22px;height:22px}
+    `;
+    document.head.appendChild(style);
+
+    function injectFeedButtons(article) {
+      if (article.getAttribute('data-dg-feed')) return;
+      if (article.classList.contains('x1iyjqo2')) return;
+      article.setAttribute('data-dg-feed', '1');
+
+      const tagName = article.tagName;
+      const childEls = Array.from(article.querySelectorAll(':scope > div > div'));
+      if (!childEls.length) return;
+
+      const targetIdx = (tagName === 'DIV') ? 0 : Math.max(0, childEls.length - 2);
+      const insertEl = childEls[targetIdx];
+      if (!insertEl) return;
+
+      if (getComputedStyle(insertEl).position === 'static') insertEl.style.position = 'relative';
+
+      const resourceLayout = childEls.find(el => el.offsetWidth > 100 && el.offsetHeight > 100);
+      const isNewPostStyle = resourceLayout
+        ? Array.from(resourceLayout.querySelectorAll('a[role="link"][tabindex="0"][href^="/"]'))
+            .some(a => !a.getAttribute('href').startsWith('/p/') && !a.getAttribute('href').startsWith('/reels/'))
+        : false;
+
+      const topOffset = isNewPostStyle ? '45px' : '15px';
+
+      const wrap = document.createElement('div');
+      wrap.className = 'dg-btn-wrap';
+      wrap.style.top = topOffset;
+
+      const dlBtn = document.createElement('button');
+      dlBtn.title = 'Download'; dlBtn.innerHTML = DL_SVG;
+      dlBtn.onclick = async (e) => { e.preventDefault(); e.stopPropagation(); await downloadFeedMedia('', article); };
+
+      const openBtn = document.createElement('button');
+      openBtn.title = 'Open in new tab'; openBtn.innerHTML = OPEN_SVG;
+      openBtn.onclick = async (e) => { e.preventDefault(); e.stopPropagation(); await openFeedMedia(article); };
+
+      wrap.append(dlBtn, openBtn);
+      insertEl.appendChild(wrap);
+    }
+
+    // ─── Video page: /p/, /reel/, /reels/, /tv/ ──────────────────────
+    function isSinglePostPage() {
+      return /^\/(p|reel|reels|tv)\//.test(location.pathname);
+    }
+
+    function injectSinglePostButtons() {
+      if (!isSinglePostPage()) return;
+      if (document.querySelector('.dg-single-post-wrap')) return;
+
+      // หา container หลักของ post — เอา video หรือ img ใหญ่มาเป็น anchor
+      const video = Array.from(document.querySelectorAll('video'))
+        .filter(v => v.offsetWidth > 200 && v.offsetHeight > 200)
+        .sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight))[0];
+      const img = Array.from(document.querySelectorAll('img'))
+        .filter(i => i.offsetWidth > 300 && i.naturalWidth > 400 && i.src?.includes('cdninstagram'))
+        .sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight))[0];
+      const anchor = video || img;
+      if (!anchor) return;
+
+      // หา wrapper ที่ position ได้
+      let container = anchor.parentElement;
+      for (let i = 0; i < 4 && container; i++) {
+        if (container.offsetWidth > 300 && container.offsetHeight > 300) break;
+        container = container.parentElement;
+      }
+      if (!container) return;
+      if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+
+      const wrap = document.createElement('div');
+      wrap.className = 'dg-btn-wrap dg-single-post-wrap';
+      wrap.style.top = '12px';
+      wrap.style.right = '12px';
+
+      // สำหรับ single post: ใช้ article = container, shortcode = URL
+      const fakeArticle = container;
+      fakeArticle.setAttribute('data-dg-shortcode-page', '1');
+
+      const dlBtn = document.createElement('button');
+      dlBtn.title = 'Download'; dlBtn.innerHTML = DL_SVG;
+      dlBtn.onclick = async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        await downloadFeedMedia('', fakeArticle);
+      };
+
+      const openBtn = document.createElement('button');
+      openBtn.title = 'Open in new tab'; openBtn.innerHTML = OPEN_SVG;
+      openBtn.onclick = async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        await openFeedMedia(fakeArticle);
+      };
+
+      wrap.append(dlBtn, openBtn);
+      container.appendChild(wrap);
+    }
+
+    // ─── Feed scan (article) ──────────────────────────────────────────
+    function scanFeed() {
+      document.querySelectorAll('article:not([data-dg-feed])').forEach(el => {
+        if (el.offsetHeight > 0 && el.offsetWidth > 0) injectFeedButtons(el);
+      });
+    }
+
+    function scanAll() {
+      scanFeed();
+      injectSinglePostButtons();
+    }
+
+    // scan เร็วขึ้น + ใช้ IntersectionObserver
+    setInterval(scanAll, 600);
+
+    let pending = false;
+    new MutationObserver(() => {
+      if (pending) return;
+      pending = true;
+      setTimeout(() => { pending = false; scanAll(); }, 250);
+    }).observe(document.body, { childList: true, subtree: true });
+
+    // scroll → scan
+    let scrollTimer = null;
+    window.addEventListener('scroll', () => {
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(scanAll, 200);
+    }, { passive: true });
+
+    // URL change → ล้างปุ่มเก่า + scan ใหม่
+    onUrlChange(() => {
+      document.querySelectorAll('.dg-single-post-wrap').forEach(el => el.remove());
+      setTimeout(scanAll, 300);
+    });
+
+    scanAll();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PLUGIN 3: Reels Downloader
+  // ═══════════════════════════════════════════════════════════════════════
+  function initIgReelsDownloader() {
+    if (window.__dgIgReelsInit) return;
+    window.__dgIgReelsInit = true;
+
+    const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
+    const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
+
     function fetchMediaByShortcode(shortcode) {
       return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
@@ -273,49 +696,6 @@
       });
     }
 
-    // exact same React fiber walk as ig-story-test.user.js
-    function getVideoRealUrl(video) {
-      const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
-      if (!fiberKey) return null;
-      try {
-        let fiber = video[fiberKey];
-        for (let i = 0; i < 30 && fiber; i++) {
-          const props = fiber.memoizedProps || fiber.pendingProps;
-          if (props) {
-            const impl = props.implementations
-              ?? props.children?.[0]?.props?.children?.props?.implementations
-              ?? props.children?.props?.children?.props?.implementations;
-            if (impl) {
-              for (const idx of [1, 0, 2]) {
-                const s = impl[idx]?.data;
-                const u = s?.hdSrc || s?.sdSrc || s?.hd_src || s?.sd_src;
-                if (u) return u;
-              }
-            }
-            if (props.src && !props.src.startsWith('blob:')) return props.src;
-            const vd = props.videoData;
-            if (vd) { const u = vd.hd_src || vd.sd_src || vd.$1?.hd_src || vd.$1?.sd_src; if (u) return u; }
-          }
-          fiber = fiber.return;
-        }
-      } catch(e) {}
-      const propsKey = fiberKey.replace('__reactFiber', '__reactProps');
-      let el = video;
-      for (let i = 0; i < 8; i++) {
-        el = el.parentElement; if (!el) break;
-        const p = el[propsKey]; if (!p) continue;
-        const impl = p.children?.[0]?.props?.children?.props?.implementations ?? p.children?.props?.children?.props?.implementations;
-        if (impl) {
-          for (const idx of [1, 0, 2]) {
-            const s = impl[idx]?.data;
-            const u = s?.hdSrc || s?.sdSrc || s?.hd_src || s?.sd_src;
-            if (u) return u;
-          }
-        }
-      }
-      return null;
-    }
-
     const style = document.createElement('style');
     style.textContent = `
       .dg-reel-wrap{position:absolute;right:40px;top:15px;display:flex;flex-direction:column;gap:4px;z-index:9999;line-height:0}
@@ -332,7 +712,6 @@
     `;
     document.head.appendChild(style);
 
-    // exact same as ig-story-test.user.js injectReelButtons
     function injectReelButtons(container) {
       if (container.querySelector('.dg-reel-wrap')) return;
 
@@ -355,7 +734,6 @@
           if (media?.video_url) { triggerDownload(media.video_url, 'mp4'); return; }
           const item = await fetchMediaByQueryID(shortcode).catch(() => null);
           if (item?.video_versions?.[0]?.url) { triggerDownload(item.video_versions[0].url, 'mp4'); return; }
-          // fallback: React fiber
           const video = container.querySelector('video');
           if (video) { const url = getVideoRealUrl(video); if (url) triggerDownload(url, 'mp4'); }
         } catch(e) { console.error('[DEV/g0d] reel download error:', e); }
@@ -380,36 +758,62 @@
       else container.appendChild(wrap);
     }
 
-    function scan() {
-      if (!location.pathname.startsWith('/reels/')) return;
-      document.querySelectorAll('div[aria-busy][tabindex] > div').forEach(el => {
-        if (el.offsetWidth > window.innerWidth * 0.8 &&
-            el.offsetHeight > window.innerHeight * 0.8 &&
-            el.querySelector('video')) {
-          injectReelButtons(el);
-        }
-      });
+    function isReelView() {
+      return /^\/(reel|reels)\//.test(location.pathname);
     }
 
-    let lastPath = '';
-    function checkReelPage() {
-      if (location.pathname === lastPath) return;
-      lastPath = location.pathname;
-      if (location.pathname.startsWith('/reels/')) {
-        document.querySelectorAll('.dg-reel-wrap').forEach(el => el.remove());
-        let attempts = 0;
-        const iv = setInterval(() => {
-          scan();
-          if (document.querySelector('.dg-reel-wrap') || ++attempts > 20) clearInterval(iv);
-        }, 250);
+    function findReelContainer() {
+      // เดิม: div[aria-busy][tabindex] > div
+      let candidates = Array.from(document.querySelectorAll('div[aria-busy][tabindex] > div'));
+      let found = candidates.find(el =>
+        el.offsetWidth > window.innerWidth * 0.7 &&
+        el.offsetHeight > window.innerHeight * 0.7 &&
+        el.querySelector('video')
+      );
+      if (found) return found;
+
+      // fallback: หา video ใหญ่อยู่กลางจอ แล้วขึ้นไป 3-5 ชั้น
+      const video = Array.from(document.querySelectorAll('video'))
+        .filter(v => v.offsetWidth > window.innerWidth * 0.4 && v.offsetHeight > window.innerHeight * 0.5)
+        .sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight))[0];
+      if (!video) return null;
+
+      let el = video;
+      for (let i = 0; i < 6 && el; i++) {
+        if (el.offsetWidth > window.innerWidth * 0.7 &&
+            el.offsetHeight > window.innerHeight * 0.7) return el;
+        el = el.parentElement;
       }
+      return video.parentElement;
     }
 
-    setInterval(checkReelPage, 500);
+    function scan() {
+      if (!isReelView()) return;
+      const container = findReelContainer();
+      if (container) injectReelButtons(container);
+    }
+
+    setInterval(scan, 500);
+
+    let pending = false;
+    new MutationObserver(() => {
+      if (pending) return;
+      pending = true;
+      setTimeout(() => { pending = false; scan(); }, 250);
+    }).observe(document.body, { childList: true, subtree: true });
+
+    onUrlChange(() => {
+      document.querySelectorAll('.dg-reel-wrap').forEach(el => el.remove());
+      setTimeout(scan, 400);
+    });
   }
 
-  // ─── 4. Profile Downloader ────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PLUGIN 4: Profile Downloader
+  // ═══════════════════════════════════════════════════════════════════════
   function initIgProfileDownloader() {
+    if (window.__dgIgProfileInit) return;
+    window.__dgIgProfileInit = true;
 
     const style = document.createElement('style');
     style.textContent = `
@@ -433,7 +837,6 @@
     }
 
     async function fetchUserId(username) {
-      // Primary: topsearch (same as ighelper)
       try {
         const res = await new Promise((resolve, reject) => {
           GM_xmlhttpRequest({
@@ -445,9 +848,8 @@
         });
         const match = res?.users?.find(u => u.user?.username?.toLowerCase() === username.toLowerCase());
         if (match?.user?.pk || match?.user?.id) return match.user.pk || match.user.id;
-      } catch(e) { /* fall through */ }
+      } catch(e) {}
 
-      // Fallback: web_profile_info
       const res = await new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
           method: 'GET',
@@ -465,8 +867,6 @@
     async function downloadProfilePic(username) {
       try {
         const userId = await fetchUserId(username);
-
-        // HD via www.instagram.com (not i.instagram.com — matches ighelper)
         try {
           const infoRes = await new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
@@ -481,9 +881,8 @@
             const hdUrl = infoRes?.user?.hd_profile_pic_url_info?.url;
             if (hdUrl) { triggerDownload(hdUrl, 'jpg'); return; }
           }
-        } catch(e) { /* fall through to fallback */ }
+        } catch(e) {}
 
-        // Fallback: profile_pic_url from web_profile_info
         const profileRes = await new Promise((resolve, reject) => {
           GM_xmlhttpRequest({
             method: 'GET',
@@ -495,15 +894,13 @@
         });
         const fallbackUrl = profileRes?.data?.user?.profile_pic_url;
         if (fallbackUrl) { triggerDownload(fallbackUrl, 'jpg'); return; }
-
-        console.warn('[DEV/g0d] Could not get profile picture URL');
       } catch(e) {
         console.error('[DEV/g0d] profile pic download error:', e);
       }
     }
 
     function injectProfileButton() {
-      if (document.querySelector('.dg-profile-btn')) return;
+      if (document.querySelector('.dg-profile-btn')) return true;
 
       const selector = 'header > *[class]:first-child > *[class]:first-child img[alt]';
       const imgDraggable = document.querySelector(`${selector}[draggable]`);
@@ -515,8 +912,7 @@
       } else if (imgNonDraggable) {
         container = imgNonDraggable.parentElement?.parentElement?.parentElement;
       }
-
-      if (!container) return;
+      if (!container) return false;
 
       if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
 
@@ -530,50 +926,40 @@
         if (username) downloadProfilePic(username);
       };
       container.appendChild(btn);
+      return true;
     }
 
     function isProfilePage() {
-      return document.querySelector('header > *[class]:first-child img[alt]') !== null &&
-        /^(\/)([0-9A-Za-z.\-_]+)\/?(?:tagged|reels|saved)?\/?$/i.test(location.pathname) &&
-        !/^(\/explore\/?$|\/stories(\/.*)?$|\/p\/)/.test(location.pathname);
+      const header = document.querySelector('header > *[class]:first-child img[alt]');
+      if (!header) return false;
+      if (/^\/(explore|stories|direct|accounts)\b/.test(location.pathname)) return false;
+      if (/^\/(p|reel|reels|tv)\//.test(location.pathname)) return false;
+      // profile URL pattern: /username/ หรือ /username/tagged
+      return /^\/[0-9A-Za-z._]+\/?(tagged|reels|saved)?\/?$/i.test(location.pathname);
     }
 
-    let lastProfilePath = '';
-    let profileObserver = null;
-
-    function checkProfilePage() {
-      const path = location.pathname;
-
+    function check() {
       if (!isProfilePage()) {
         document.querySelector('.dg-profile-btn')?.remove();
         return;
       }
-
-      if (!document.querySelector('.dg-profile-btn')) {
-        injectProfileButton();
-      }
-
-      if (path !== lastProfilePath) {
-        lastProfilePath = path;
-        profileObserver?.disconnect();
-        const header = document.querySelector('header');
-        if (header) {
-          profileObserver = new MutationObserver(() => {
-            if (!document.querySelector('.dg-profile-btn')) {
-              injectProfileButton();
-            }
-          });
-          profileObserver.observe(header, { childList: true, subtree: true });
-        }
-      }
+      if (!document.querySelector('.dg-profile-btn')) injectProfileButton();
     }
 
-    setInterval(checkProfilePage, 300);
+    setInterval(check, 400);
+    onUrlChange(() => {
+      document.querySelector('.dg-profile-btn')?.remove();
+      setTimeout(check, 300);
+    });
   }
-  // ─── 5. Video SeekBar ─────────────────────────────────────────────────────
-  function initIgSeekbar() {
 
-    // ShieldBypass: exact copy from ig-seekbar.user.js
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PLUGIN 5: Video SeekBar
+  // ═══════════════════════════════════════════════════════════════════════
+  function initIgSeekbar() {
+    if (window.__dgIgSeekbarInit) return;
+    window.__dgIgSeekbarInit = true;
+
     const ShieldBypass = {
       init() {
         ['mousedown', 'mouseup', 'click'].forEach(eventType => {
@@ -653,24 +1039,19 @@
         this.isDragging = false;
         this.container = this.createContainer();
       }
-
       createContainer() {
         const control = document.createElement('div');
         control.className = 'dg-sb-control';
         control.appendChild(this.createTimeline());
         return control;
       }
-
       createTimeline() {
         const timeline = document.createElement('div');
         timeline.className = 'dg-sb-timeline';
-
         const progress = document.createElement('div');
         progress.className = 'dg-sb-progress';
-
         const seekHandle = document.createElement('div');
         seekHandle.className = 'dg-sb-seek-handle';
-
         const tooltip = document.createElement('div');
         tooltip.className = 'dg-sb-tooltip';
         Object.assign(tooltip.style, {
@@ -681,19 +1062,15 @@
           display: 'none', zIndex: '10000000',
           pointerEvents: 'none', whiteSpace: 'nowrap',
         });
-
         progress.appendChild(seekHandle);
         timeline.appendChild(progress);
-
         const container = document.createElement('div');
         container.className = 'dg-sb-timeline-container';
         container.appendChild(timeline);
         container.appendChild(tooltip);
-
         this.setupTimelineEvents(container, timeline, progress, seekHandle, tooltip);
         return container;
       }
-
       setupTimelineEvents(container, timeline, progress, seekHandle, tooltip) {
         const fmt = s => `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`;
         const getPos = (e) => {
@@ -707,7 +1084,6 @@
           tooltip.textContent = fmt(this.video.duration * pos);
         };
         const hideTooltip = () => { tooltip.style.display = 'none'; };
-
         container.addEventListener('mousedown', (e) => {
           e.stopPropagation();
           this.isDragging = true;
@@ -717,7 +1093,6 @@
           progress.style.width = `${pos * 100}%`;
           if (this.video.duration) this.video.currentTime = this.video.duration * pos;
           showTooltip(pos);
-
           const onMove = (e) => {
             const pos = getPos(e);
             progress.style.width = `${pos * 100}%`;
@@ -735,10 +1110,8 @@
           document.addEventListener('mousemove', onMove);
           window.addEventListener('mouseup', onUp, true);
         });
-
         container.addEventListener('mousemove', (e) => { if (!this.isDragging) showTooltip(getPos(e)); });
         container.addEventListener('mouseleave', () => { if (!this.isDragging) hideTooltip(); });
-
         this.video.addEventListener('timeupdate', () => {
           if (!this.isDragging && this.video.duration) {
             progress.style.width = `${(this.video.currentTime / this.video.duration) * 100}%`;
@@ -748,14 +1121,11 @@
     }
 
     const processedVideos = new WeakSet();
-
     const addSeekbarToVideo = (videoElement) => {
       if (processedVideos.has(videoElement)) return;
       const videoContainer = videoElement.closest('div[class*="x5yr21d"][class*="x1uhb9sk"]');
       if (!videoContainer) return;
-
       processedVideos.add(videoElement);
-
       const seekbar = new Seekbar(videoElement);
       const controlsWrapper = document.createElement('div');
       controlsWrapper.className = 'dg-sb-controls-wrapper';
@@ -764,11 +1134,9 @@
         left: '0', right: '0', bottom: '0',
         zIndex: '9999999', pointerEvents: 'none'
       });
-
       controlsWrapper.appendChild(seekbar.container);
       videoContainer.style.position = 'relative';
       videoContainer.appendChild(controlsWrapper);
-
       new MutationObserver(() => {
         if (!document.contains(videoElement)) controlsWrapper.remove();
       }).observe(document.body, { childList: true, subtree: true });
@@ -787,347 +1155,59 @@
     ShieldBypass.init();
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PLUGIN 6: AllowSave
+  // ═══════════════════════════════════════════════════════════════════════
   function initIgAllowSave() {
-    (function() {
-      function allowSave() {
-        document.querySelectorAll('img').forEach(img => {
-          img.removeAttribute('srcset'); img.removeAttribute('sizes');
-          const parent = img.parentElement;
-          if (!parent || parent.tagName !== 'DIV') return;
-          const next = parent.nextElementSibling;
-          if (!next || next.tagName !== 'DIV') return;
-          if (next.nextElementSibling?.className) return;
-          next.style.display = next.children.length === 0 ? 'none' : '';
-        });
-      }
-      const obs = new MutationObserver(() => { obs.disconnect(); allowSave(); obs.observe(document, { attributes: true, childList: true, subtree: true }); });
-      obs.observe(document, { attributes: true, childList: true, subtree: true });
-      allowSave();
-    })();
+    if (window.__dgIgAllowSaveInit) return;
+    window.__dgIgAllowSaveInit = true;
+    function allowSave() {
+      document.querySelectorAll('img').forEach(img => {
+        img.removeAttribute('srcset'); img.removeAttribute('sizes');
+        const parent = img.parentElement;
+        if (!parent || parent.tagName !== 'DIV') return;
+        const next = parent.nextElementSibling;
+        if (!next || next.tagName !== 'DIV') return;
+        if (next.nextElementSibling?.className) return;
+        next.style.display = next.children.length === 0 ? 'none' : '';
+      });
+    }
+    const obs = new MutationObserver(() => { obs.disconnect(); allowSave(); obs.observe(document, { attributes: true, childList: true, subtree: true }); });
+    obs.observe(document, { attributes: true, childList: true, subtree: true });
+    allowSave();
   }
 
-  // ─── 2. Content Downloader (feed posts) ──────────────────────────────────
-  function initIgContentDownloader() {
-
-    function getShortcode(article) {
-      if (!article) return null;
-      for (const a of article.querySelectorAll('a[href]')) {
-        const m = a.href.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
-        if (m) return m[2];
-      }
-      const m = location.pathname.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
-      return m ? m[2] : null;
-    }
-
-    function fetchMediaByShortcode(shortcode) {
-      return new Promise((resolve, reject) => {
-        const url = `https://www.instagram.com/graphql/query/?query_hash=2c4c2e343a8f64c625ba02b2aa12c7f8&variables=%7B%22shortcode%22:%22${shortcode}%22%7D`;
-        GM_xmlhttpRequest({
-          method: 'GET', url,
-          headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; Pixel 7 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.5938.60 Mobile Safari/537.36 Instagram 307.0.0.34.111' },
-          onload: res => {
-            try {
-              const obj = JSON.parse(res.responseText);
-              if (obj.status === 'fail') { reject('fail'); return; }
-              resolve(obj.data?.shortcode_media ?? obj.data);
-            } catch(e) { reject(e); }
-          },
-          onerror: reject,
-        });
-      });
-    }
-
-    function fetchMediaByQueryID(shortcode) {
-      return new Promise((resolve, reject) => {
-        const url = `https://www.instagram.com/graphql/query/?query_id=9496392173716084&variables={%22shortcode%22:%22${shortcode}%22,%22__relay_internal__pv__PolarisFeedShareMenurelayprovider%22:true,%22__relay_internal__pv__PolarisIsLoggedInrelayprovider%22:true}`;
-        GM_xmlhttpRequest({
-          method: 'GET', url,
-          onload: res => {
-            try {
-              const obj = JSON.parse(res.responseText);
-              const item = obj.data?.xdt_api__v1__media__shortcode__web_info?.items?.[0];
-              resolve(item);
-            } catch(e) { reject(e); }
-          },
-          onerror: reject,
-        });
-      });
-    }
-
-    function getVideoRealUrl(video) {
-      const fiberKey = Object.keys(video).find(k => k.startsWith('__reactFiber'));
-      if (!fiberKey) return null;
-      try {
-        let fiber = video[fiberKey];
-        for (let i = 0; i < 30 && fiber; i++) {
-          const props = fiber.memoizedProps || fiber.pendingProps;
-          if (props) {
-            const impl = props.implementations ?? props.children?.[0]?.props?.children?.props?.implementations ?? props.children?.props?.children?.props?.implementations;
-            if (impl) { for (const idx of [1,0,2]) { const s=impl[idx]?.data; const u=s?.hdSrc||s?.sdSrc||s?.hd_src||s?.sd_src; if (u) return u; } }
-            if (props.src && !props.src.startsWith('blob:')) return props.src;
-            const vd = props.videoData;
-            if (vd) { const u=vd.hd_src||vd.sd_src||vd.$1?.hd_src||vd.$1?.sd_src; if (u) return u; }
-          }
-          fiber = fiber.return;
-        }
-      } catch(e) {}
-      const propsKey = fiberKey.replace('__reactFiber','__reactProps');
-      let el = video;
-      for (let i=0;i<8;i++) {
-        el=el.parentElement; if (!el) break;
-        const p=el[propsKey]; if (!p) continue;
-        const impl=p.children?.[0]?.props?.children?.props?.implementations??p.children?.props?.children?.props?.implementations;
-        if (impl) { for (const idx of [1,0,2]) { const s=impl[idx]?.data; const u=s?.hdSrc||s?.sdSrc||s?.hd_src||s?.sd_src; if (u) return u; } }
-      }
-      return null;
-    }
-
-    // Get current carousel index — ported from ighelper's getVisibleNodeIndex
-    function getCarouselIndex(article) {
-      // If no "back" button exists, we're on the first slide
-      const hasBackButton = article.querySelector('button[aria-label*="Go back"], button._afxv, button[class*="back"]') !== null
-        || (() => {
-          // Check for any button that's a "previous" nav (left arrow area)
-          const btns = article.querySelectorAll('button');
-          for (const b of btns) {
-            const rect = b.getBoundingClientRect();
-            const articleRect = article.getBoundingClientRect();
-            // Button on the left side of the article = back button
-            if (rect.width > 0 && rect.left < articleRect.left + articleRect.width * 0.2) return true;
-          }
-          return false;
-        })();
-
-      if (!hasBackButton) return 0;
-
-      // Find the carousel viewport: parent of parent of ul[class]
-      const ul = article.querySelector('ul[class]');
-      if (!ul) return 0;
-
-      const viewport = ul.parentElement?.parentElement;
-      if (!viewport) return 0;
-
-      const viewportRect = viewport.getBoundingClientRect();
-      const itemWidth = viewportRect.width;
-      if (itemWidth === 0) return 0;
-
-      // Find the <li> whose right edge is closest to viewport's right edge
-      const slides = article.querySelectorAll('li[class]');
-      let closestSlide = null;
-      let minDistance = Infinity;
-
-      for (const slide of slides) {
-        const rect = slide.getBoundingClientRect();
-        if (rect.width === 0) continue;
-        const distance = Math.abs(rect.right - viewportRect.right);
-        if (distance < minDistance) {
-          minDistance = distance;
-          closestSlide = slide;
-        }
-      }
-
-      if (!closestSlide) return 0;
-
-      // Extract translateX from style to calculate index
-      const style = closestSlide.getAttribute('style') || '';
-      const match = style.match(/translateX\(([^p]+)px\)/);
-      if (match) {
-        const totalOffset = parseFloat(match[1]);
-        return Math.round(totalOffset / itemWidth);
-      }
-
-      return 0;
-    }
-
-    async function downloadFeedMedia(src, article) {
-      const shortcode = getShortcode(article);
-      const idx = getCarouselIndex(article);
-
-      if (shortcode) {
-        try {
-          let media = await fetchMediaByShortcode(shortcode).catch(() => null);
-          if (media) {
-            if (media.video_url && idx === 0) { triggerDownload(media.video_url, 'mp4'); return; }
-            if (media.edge_sidecar_to_children) {
-              const items = media.edge_sidecar_to_children.edges.map(e => e.node);
-              const item = items[idx] ?? items[0];
-              if (item.video_url) { triggerDownload(item.video_url, 'mp4'); return; }
-              if (item.display_url) { triggerDownload(item.display_url, 'jpg'); return; }
-            }
-            const imgUrl = media.display_resources?.at(-1)?.src || media.display_url;
-            if (imgUrl) { triggerDownload(imgUrl, 'jpg'); return; }
-          }
-          const item = await fetchMediaByQueryID(shortcode).catch(() => null);
-          if (item) {
-            // carousel_media contains all slides
-            if (item.carousel_media?.length) {
-              const slide = item.carousel_media[idx] ?? item.carousel_media[0];
-              if (slide.video_versions?.length) { triggerDownload(slide.video_versions[0].url, 'mp4'); return; }
-              if (slide.image_versions2?.candidates?.length) { triggerDownload(slide.image_versions2.candidates[0].url, 'jpg'); return; }
-            }
-            if (item.video_versions?.length) { triggerDownload(item.video_versions[0].url, 'mp4'); return; }
-            if (item.image_versions2?.candidates?.length) { triggerDownload(item.image_versions2.candidates[0].url, 'jpg'); return; }
-          }
-        } catch(e) { console.error('[DEV/g0d] fetchMedia error:', e); }
-      }
-      if (src && !src.startsWith('blob:')) { triggerDownload(src, 'jpg'); return; }
-      const video = article?.querySelector('video');
-      if (video) { const url = getVideoRealUrl(video); if (url) { triggerDownload(url, 'mp4'); return; } }
-      console.warn('[DEV/g0d] Could not get media URL');
-    }
-
-    async function openFeedMedia(article) {
-      const shortcode = getShortcode(article);
-      const idx = getCarouselIndex(article);
-      if (!shortcode) return;
-      try {
-        let media = await fetchMediaByShortcode(shortcode).catch(() => null);
-        if (media?.edge_sidecar_to_children) {
-          const items = media.edge_sidecar_to_children.edges.map(e => e.node);
-          const item = items[idx] ?? items[0];
-          window.open(item?.video_url || item?.display_url, '_blank'); return;
-        }
-        if (media?.video_url) { window.open(media.video_url, '_blank'); return; }
-        if (media?.display_url) { window.open(media.display_url, '_blank'); return; }
-        const item = await fetchMediaByQueryID(shortcode).catch(() => null);
-        if (item?.carousel_media?.length) {
-          const slide = item.carousel_media[idx] ?? item.carousel_media[0];
-          window.open(slide?.video_versions?.[0]?.url || slide?.image_versions2?.candidates?.[0]?.url, '_blank'); return;
-        }
-        if (item?.video_versions?.[0]?.url) { window.open(item.video_versions[0].url, '_blank'); return; }
-        if (item?.image_versions2?.candidates?.[0]?.url) { window.open(item.image_versions2.candidates[0].url, '_blank'); return; }
-      } catch(e) { console.error('[DEV/g0d] openFeedMedia error:', e); }
-    }
-
-    const DL_SVG   = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>`;
-    const OPEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`;
-
-    const style = document.createElement('style');
-    style.textContent = `
-      .dg-btn-wrap{position:absolute;top:12px;right:12px;display:flex;flex-flow:row-reverse;gap:2px;z-index:9999;line-height:0}
-      .dg-btn-wrap button{
-        width:36px;height:36px;border-radius:50%;
-        background:transparent;border:none;cursor:pointer;
-        display:flex;align-items:center;justify-content:center;
-        color:white;padding:0;
-        transition:opacity .2s;
-        filter:drop-shadow(0 1px 3px rgba(0,0,0,0.5));
-      }
-      .dg-btn-wrap button:hover{opacity:.7}
-      .dg-btn-wrap button svg{width:22px;height:22px}
-    `;
-    document.head.appendChild(style);
-
-    function injectFeedButtons(article) {
-      if (article.getAttribute('data-dg-feed')) return;
-      if (article.classList.contains('x1iyjqo2')) return;
-      article.setAttribute('data-dg-feed', '1');
-
-      const tagName = article.tagName;
-      const childEls = Array.from(article.querySelectorAll(':scope > div > div'));
-      if (!childEls.length) return;
-
-      const targetIdx = (tagName === 'DIV') ? 0 : Math.max(0, childEls.length - 2);
-      const insertEl = childEls[targetIdx];
-      if (!insertEl) return;
-
-      insertEl.style.position = 'relative';
-
-      const resourceLayout = childEls.find(el => el.offsetWidth > 100 && el.offsetHeight > 100);
-      const isNewPostStyle = resourceLayout
-        ? Array.from(resourceLayout.querySelectorAll('a[role="link"][tabindex="0"][href^="/"]'))
-            .some(a => !a.getAttribute('href').startsWith('/p/') && !a.getAttribute('href').startsWith('/reels/'))
-        : false;
-
-      const topOffset = isNewPostStyle ? '45px' : '15px';
-
-      const wrap = document.createElement('div');
-      wrap.className = 'dg-btn-wrap';
-      wrap.style.top = topOffset;
-
-      const dlBtn = document.createElement('button');
-      dlBtn.title = 'Download'; dlBtn.innerHTML = DL_SVG;
-      dlBtn.onclick = async (e) => { e.preventDefault(); e.stopPropagation(); await downloadFeedMedia('', article); };
-
-      const openBtn = document.createElement('button');
-      openBtn.title = 'Open in new tab'; openBtn.innerHTML = OPEN_SVG;
-      openBtn.onclick = async (e) => { e.preventDefault(); e.stopPropagation(); await openFeedMedia(article); };
-
-      wrap.append(dlBtn, openBtn);
-      insertEl.appendChild(wrap);
-    }
-
-    function scanArticles() {
-      document.querySelectorAll('article:not([data-dg-feed])').forEach(el => {
-        if (el.offsetHeight > 0 && el.offsetWidth > 0) injectFeedButtons(el);
-      });
-    }
-
-    setInterval(scanArticles, 1000);
-    new MutationObserver(scanArticles).observe(document.body, { childList: true, subtree: true });
-  }
-
-  // ─── 6. Anonymous Stories ─────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+  //  PLUGIN 7: Anonymous Stories
+  // ═══════════════════════════════════════════════════════════════════════
   function initIgAnonymousStories() {
+    if (window.__dgIgAnonInit) return;
+    window.__dgIgAnonInit = true;
     const win = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
     const originalSend = win.XMLHttpRequest.prototype.send;
-
     win.XMLHttpRequest.prototype.send = function () {
       const body = arguments[0];
-      if (typeof body === 'string' && body.includes('viewSeenAt')) {
-        // Block the "seen" notification — do not call original
-        return;
-      }
+      if (typeof body === 'string' && body.includes('viewSeenAt')) return;
       originalSend.apply(this, arguments);
     };
   }
 
-  // ─── Register Plugins ─────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════
+  //  Register Plugins
+  // ═══════════════════════════════════════════════════════════════════════
   const icon = (d) => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">${d}</svg>`;
 
   window.DEVg0d_PLUGINS = [
-    {
-      name: icon('<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>') + 'StorySaver',
-      type: 'toggle',
-      key: 'devg0d-ig-story',
-      init: initIgStorySaver,
-    },
-    {
-      name: icon('<rect x="2" y="2" width="20" height="20" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="#8b949e"/>') + 'ContentDownloader',
-      type: 'toggle',
-      key: 'devg0d-ig-content',
-      init: initIgContentDownloader,
-    },
-    {
-      name: icon('<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>') + 'ReelsDownloader',
-      type: 'toggle',
-      key: 'devg0d-ig-reels',
-      init: initIgReelsDownloader,
-    },
-    {
-      name: icon('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>') + 'ProfileDownloader',
-      type: 'toggle',
-      key: 'devg0d-ig-profile',
-      init: initIgProfileDownloader,
-    },
-    {
-      name: icon('<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>') + 'VideoSeekBar',
-      type: 'toggle',
-      key: 'devg0d-ig-seekbar',
-      init: initIgSeekbar,
-    },
-    {
-      name: icon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>') + 'AllowSave',
-      type: 'toggle',
-      key: 'devg0d-ig-allowsave',
-      init: initIgAllowSave,
-    },
-    {
-      name: icon('<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>') + 'AnonymousStories',
-      type: 'toggle',
-      key: 'devg0d-ig-anon-stories',
-      init: initIgAnonymousStories,
-    },
+    { name: icon('<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>') + 'StorySaver', type: 'toggle', key: 'devg0d-ig-story', init: initIgStorySaver },
+    { name: icon('<rect x="2" y="2" width="20" height="20" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="#8b949e"/>') + 'ContentDownloader', type: 'toggle', key: 'devg0d-ig-content', init: initIgContentDownloader },
+    { name: icon('<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>') + 'ReelsDownloader', type: 'toggle', key: 'devg0d-ig-reels', init: initIgReelsDownloader },
+    { name: icon('<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>') + 'ProfileDownloader', type: 'toggle', key: 'devg0d-ig-profile', init: initIgProfileDownloader },
+    { name: icon('<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>') + 'VideoSeekBar', type: 'toggle', key: 'devg0d-ig-seekbar', init: initIgSeekbar },
+    { name: icon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>') + 'AllowSave', type: 'toggle', key: 'devg0d-ig-allowsave', init: initIgAllowSave },
+    { name: icon('<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>') + 'AnonymousStories', type: 'toggle', key: 'devg0d-ig-anon-stories', init: initIgAnonymousStories },
   ];
+
+  window.__dgPluginsReady = true;
+  window.dispatchEvent(new Event('dg-plugins-ready'));
 
 })();
