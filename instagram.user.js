@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DEV/g0d Instagram
 // @namespace    FREELOADING
-// @version      2.1
+// @version      2.2
 // @description  DEV/g0d - Instagram tools
 // @author       DEV/g0d
 // @license      MIT
@@ -19,7 +19,7 @@
 
 (function () {
   'use strict';
-  // if (window.self !== window.top) return; // disabled — IG may render in iframe
+  // if (window.self !== window.top) return;
 
   const getKey = (k) => localStorage.getItem(k) !== 'false';
   const setKey = (k, v) => localStorage.setItem(k, v ? 'true' : 'false');
@@ -75,9 +75,9 @@
     .dg-ig-sw input:checked+span:before { transform:translateX(16px) !important; background:#fff !important; }
   `);
 
-  const plugins = window.DEVg0d_PLUGINS || [];
+  function buildUI() {
+    const plugins = window.DEVg0d_PLUGINS || [];
 
-  function init() {
     const tab = document.createElement('div');
     tab.id = 'dg-ig-tab';
     tab.textContent = L ? '›' : '‹';
@@ -111,7 +111,7 @@
       input.onchange = (e) => {
         e.stopPropagation();
         setKey(p.key, input.checked);
-        alert(`"${p.name}" ${input.checked?'enabled':'disabled'} — reload to apply.`);
+        alert(`"${p.name.replace(/<[^>]+>/g, '')}" ${input.checked?'enabled':'disabled'} — reload to apply.`);
       };
     });
 
@@ -121,7 +121,26 @@
     });
   }
 
-  if (document.body) init();
-  else document.addEventListener('DOMContentLoaded', init);
+  function whenReady(fn) {
+    if (window.__dgPluginsReady) { fn(); return; }
+    window.addEventListener('dg-plugins-ready', fn, { once: true });
+    let tries = 0;
+    const iv = setInterval(() => {
+      if (window.__dgPluginsReady) {
+        clearInterval(iv);
+        window.removeEventListener('dg-plugins-ready', fn);
+        fn();
+      } else if (++tries > 100) {
+        clearInterval(iv);
+        console.warn('[DEV/g0d] plugins not loaded');
+        fn();
+      }
+    }, 100);
+  }
+
+  whenReady(() => {
+    if (document.body) buildUI();
+    else document.addEventListener('DOMContentLoaded', buildUI);
+  });
 
 })();
