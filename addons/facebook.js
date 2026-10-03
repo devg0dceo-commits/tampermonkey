@@ -61,9 +61,6 @@
     return __origOpen.apply(this, arguments);
   };
 
-  // ─── Helpers ──────────────────────────────────────────────────────────
-  const getSetting = (key) => localStorage.getItem(key) !== 'false';
-
   // ═══════════════════════════════════════════════════════════════════════
   //  PLUGIN 1: VideoDownloader
   // ═══════════════════════════════════════════════════════════════════════
@@ -344,7 +341,7 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════
-  //  PLUGIN 2: StorySaver v5 — Story-bound URL matching
+  //  PLUGIN 2: StorySaver v5
   // ═══════════════════════════════════════════════════════════════════════
   function initFbStorySaver() {
     if (window.__dgStoryInit) return;
@@ -353,7 +350,6 @@
     let pollingInterval = null;
     let lastDialogOpen = false;
 
-    // ─── Story Tracking ───────────────────────────────────────────────
     let activeVideoEl = null;
     let activeStoryStartTime = 0;
 
@@ -525,7 +521,6 @@
         onStoryChanged();
       }
 
-      // 1) video element http URL ตรง ๆ
       if (v) {
         if (v.currentSrc && v.currentSrc.startsWith('http')) {
           debug.push(`video.currentSrc: ${v.currentSrc.slice(0, 100)}`);
@@ -542,7 +537,6 @@
         }
       }
 
-      // 2) network captured videos (หลัง story เริ่ม)
       const since = activeStoryStartTime || (Date.now() - 30000);
       const captured = __dgCaptured.videos
         .filter(x => x.time >= since)
@@ -555,7 +549,6 @@
         return { url: best.url, type: 'video', debug };
       }
 
-      // 3) captured images
       const capturedImgs = __dgCaptured.images
         .filter(x => x.time >= since)
         .sort((a, b) => b.time - a.time);
@@ -566,7 +559,6 @@
         return { url: best.url, type: 'image', debug };
       }
 
-      // 4) DOM images
       const scope = document.querySelector('div[role="dialog"]') || document;
       const domImgs = Array.from(scope.querySelectorAll('img'))
         .filter(img => {
@@ -583,7 +575,6 @@
         return { url: domImgs[0].src, type: 'image', debug };
       }
 
-      // 5) bg-image
       for (const el of scope.querySelectorAll('*')) {
         const bg = getComputedStyle(el).backgroundImage;
         const m = bg && bg.match(/url\(["']?(https:\/\/[^"')]+)["']?\)/);
@@ -734,7 +725,6 @@
       }
     }
 
-    // poll ตรวจการเปลี่ยนสตอรี่แบบเร็ว
     setInterval(() => {
       if (!lastDialogOpen) return;
       const v = findActiveVideo();
@@ -763,20 +753,92 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  //  PLUGIN 3: ProfileViewer (Unlock Full HD profile picture)
+  // ═══════════════════════════════════════════════════════════════════════
+  function getHDUrl(targetSVG) {
+    if (!targetSVG) return null;
+    const img = targetSVG.querySelector('image');
+    if (!img) return null;
+
+    const href = img.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || img.getAttribute('href') || '';
+    if (!href.includes('cstp=mx')) return null;
+
+    const mxMatch = href.match(/cstp=mx(\d+x\d+)/);
+    if (!mxMatch) return null;
+
+    return href.replace(/ctp=s\d+x\d+/, `ctp=s${mxMatch[1]}`).replace(/&amp;/g, '&');
+  }
+
+  function actionFindAndOpenHD() {
+    const dialogs = document.querySelectorAll('div[role="dialog"], div[role="main"] ~ div');
+    for (const dialog of dialogs) {
+      const svgs = dialog.querySelectorAll('svg');
+      for (const svg of svgs) {
+        const hdUrl = getHDUrl(svg);
+        if (hdUrl) {
+          window.open(hdUrl, '_blank');
+          return true;
+        }
+      }
+    }
+
+    const allSVGs = document.querySelectorAll('svg');
+    for (const svg of allSVGs) {
+      const width = svg.viewBox?.baseVal?.width || svg.clientWidth || parseInt(svg.style.width) || 0;
+      const height = svg.viewBox?.baseVal?.height || svg.clientHeight || parseInt(svg.style.height) || 0;
+      if (width >= 100 && height >= 100) {
+        if (svg.closest('div[role="navigation"]')) continue;
+        let label = '';
+        let el = svg;
+        for (let i = 0; i < 5; i++) {
+          if (!el) break;
+          label = el.getAttribute('aria-label') || '';
+          if (label) break;
+          el = el.parentElement;
+        }
+        if (label.trim() === 'Your profile') {
+          alert('ไม่พบรูปโปรไฟล์ ลองรีเฟรชแล้วลองอีกครั้ง');
+          return false;
+        }
+
+        const hdUrl = getHDUrl(svg);
+        if (hdUrl) {
+          window.open(hdUrl, '_blank');
+          return true;
+        }
+      }
+    }
+
+    alert('ไม่พบรูปโปรไฟล์ ลองรีเฟรชแล้วลองอีกครั้ง');
+    return false;
+  }
+
+  // register GM menu
+  try { GM_registerMenuCommand("🔍 Profile Viewer", actionFindAndOpenHD); } catch(e) {}
+
+  // ═══════════════════════════════════════════════════════════════════════
   //  Register Plugins
   // ═══════════════════════════════════════════════════════════════════════
+  const icon = (d) => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px">${d}</svg>`;
+
   window.DEVg0d_PLUGINS = [
     {
-      name: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px"><path d="M15 10l4.553-2.069A1 1 0 0 1 21 8.82v6.36a1 1 0 0 1-1.447.89L15 14M3 8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>VideoDownloader',
+      name: icon('<path d="M15 10l4.553-2.069A1 1 0 0 1 21 8.82v6.36a1 1 0 0 1-1.447.89L15 14M3 8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>') + 'VideoDownloader',
       type: 'toggle',
       key: 'devg0d-fb-video',
       init: initFbVideoDownloader,
     },
     {
-      name: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>StorySaver',
+      name: icon('<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>') + 'StorySaver',
       type: 'toggle',
       key: 'devg0d-fb-story',
       init: initFbStorySaver,
+    },
+    {
+      name: icon('<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>') + 'ProfileViewer',
+      type: 'click',
+      key: 'devg0d-fb-profile',
+      fn: actionFindAndOpenHD,
     },
   ];
 
