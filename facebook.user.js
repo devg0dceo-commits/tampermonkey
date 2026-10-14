@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         DEV/g0d Facebook
 // @namespace    FREELOADING
-// @version      2.4
-// @description  DEV/g0d - Facebook tools
+// @version      2.5
+// @description  DEV/g0d - Facebook tools (VideoDownloader v2.6 + StorySaver + HoverZoom + ProfileViewer)
 // @author       DEV/g0d
 // @license      MIT
 // @match        *://facebook.com/*
@@ -12,9 +12,10 @@
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
+// @grant        GM_registerMenuCommand
 // @downloadURL  https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/facebook.user.js
 // @updateURL    https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/facebook.user.js
-// @require      https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/addons/facebook.js
+// @require      https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/addons/facebook.js?v=25
 // @run-at       document-start
 // ==/UserScript==
 
