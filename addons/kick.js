@@ -236,6 +236,7 @@
 
   let activeHls = null;
   let isUnlocking = false;
+  let hardRetries = 0;
   let activePlayerUi = null;
   let activeChatController = null;
   let globalPlayerListenersBound = false;
@@ -1184,6 +1185,7 @@
     const retryBtn = container.querySelector('#k-retry-unlock');
     if (retryBtn) {
       retryBtn.addEventListener('click', () => {
+        hardRetries = 0;
         delete container.dataset.kickUnlockerProcessing;
         unlockVideo(container, container);
       });
@@ -1703,6 +1705,18 @@
             || detail === 'manifestParsingError';
 
           if (hardFail) {
+            if (hardRetries < 2) {
+              hardRetries++;
+              try {
+                if (result.channelSlug && result.pageVideo) {
+                  sessionStorage.removeItem(`devg0d-kick-ivs-${result.channelSlug}-${result.pageVideo.id}`);
+                }
+              } catch (e) {}
+              note('hard fail - re-resolving', { status, attempt: hardRetries, url: finalUrl });
+              delete container.dataset.kickUnlockerProcessing;
+              setTimeout(() => { unlockVideo(container, container); }, 500);
+              return;
+            }
             let extra = '';
             if (detail === 'manifestParsingError') {
               const body = String(data.response?.text || '').slice(0, 200).replace(/\s+/g, ' ');
@@ -1712,7 +1726,7 @@
             failPlayer(
               (status === 401 || status === 403)
                 ? `Kick rejected this stream URL (HTTP ${status}). The link is expired or not playable for this video - try Retry.`
-                : `Kick returned a stream URL that is not a playable playlist.${extra}`
+                : `Kick returned a stream URL that is not a playable playlist${status ? ` (HTTP ${status})` : ''}.${extra}`
             );
             return;
           }
