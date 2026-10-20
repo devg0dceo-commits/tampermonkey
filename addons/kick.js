@@ -1062,16 +1062,16 @@
   }
 
   function findPlayerContainer(triggerElement) {
+    const viewArea = Math.max(1, (window.innerWidth || 1280) * (window.innerHeight || 720));
     let node = triggerElement;
     for (let depth = 0; depth < 12 && node && node !== document.body; depth++) {
       const rect = node.getBoundingClientRect();
-      if (rect.width >= 320 && rect.height >= 180) return node;
+      const landscape = rect.width / Math.max(1, rect.height) >= 1.2;
+      const bigEnough = rect.width * rect.height >= viewArea * 0.12;
+      if (rect.width >= 320 && rect.height >= 180 && landscape && bigEnough) return node;
       node = node.parentElement;
     }
-    return triggerElement.closest('.relative.flex.flex-col')
-      || triggerElement.closest('div[class*="overflow-hidden"][class*="rounded"]')
-      || triggerElement.closest('div[class*="relative"][class*="flex"]')
-      || triggerElement.parentElement;
+    return null;
   }
 
   let fitTimer = null;
@@ -1783,10 +1783,22 @@
     return GATE_PATTERNS.some((re) => re.test(text));
   }
 
+  function gateCopy(el, max) {
+    const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!t || t.length > max) return false;
+    return GATE_PATTERNS.some((re) => re.test(t));
+  }
+
+  const CHAT_SEL = '[id*="chatroom"],[class*="chatroom"],[id*="chat-message"],[class*="chat-message"],[data-testid*="chat-message"]';
+
   function findGate({ deep = false } = {}) {
     for (const sel of GATE_SELECTORS) {
-      const el = document.querySelector(sel);
-      if (el) return el;
+      for (const el of document.querySelectorAll(sel)) {
+        if (el.closest(CHAT_SEL)) continue;
+        if (!isVisible(el)) continue;
+        if (!gateCopy(el, 600)) continue;
+        return el;
+      }
     }
     if (!deep) return null;
 
@@ -1797,6 +1809,7 @@
     for (const el of scope.querySelectorAll('p, h1, h2, h3, h4, span, div')) {
       if (el.childElementCount > 3) continue;
       if (el.closest('#k-player, #dg-kick-popup, #dg-kick-tab')) continue;
+      if (el.closest(CHAT_SEL)) continue;
 
       const text = (el.textContent || '').trim();
       if (text.length < 8 || text.length > 200) continue;
