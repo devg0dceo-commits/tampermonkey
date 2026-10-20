@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DEV/g0d Kick
 // @namespace    FREELOADING
-// @version      1.1
+// @version      2.0
 // @description  DEV/g0d - Kick tools
 // @author       DEV/g0d
 // @license      MIT
@@ -9,10 +9,19 @@
 // @match        *://*.kick.com/*
 // @icon         https://kick.com/favicon.ico
 // @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// @grant        GM_download
 // @grant        unsafeWindow
+// @connect      kick.com
+// @connect      web.kick.com
+// @connect      stream.kick.com
+// @connect      *.kick.com
+// @connect      *.live-video.net
+// @connect      *.cloudfront.net
 // @downloadURL  https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/kick.user.js
 // @updateURL    https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/main/kick.user.js
-// @require      https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/refs/heads/main/addons/kick.js
+// @require      https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js
+// @require      https://raw.githubusercontent.com/devg0dceo-commits/tampermonkey/refs/heads/main/addons/kick.js?v=20
 // @run-at       document-start
 // ==/UserScript==
 
@@ -24,40 +33,74 @@
   const setKey = (k, v) => localStorage.setItem(k, v ? 'true' : 'false');
   const L = (localStorage.getItem('devg0d-menu-pos') || 'right') === 'left';
 
-  GM_addStyle(`
-    #dg-kick-tab{position:fixed !important;top:50% !important;transform:translateY(-50%) !important;
-      ${L?'left:0 !important':'right:0 !important'};width:18px !important;height:48px !important;
-      background:rgba(22,27,34,0.7) !important;border:1px solid rgba(48,54,61,0.5) !important;
+  const CSS = `
+    #dg-kick-tab {
+      position:fixed !important; top:50% !important; transform:translateY(-50%) !important;
+      ${L?'left:0 !important':'right:0 !important'}; width:18px !important; height:48px !important;
+      background:rgba(22,27,34,0.7) !important; border:1px solid rgba(48,54,61,0.5) !important;
       ${L?'border-left:none !important;border-radius:0 6px 6px 0 !important':'border-right:none !important;border-radius:6px 0 0 6px !important'};
-      cursor:pointer !important;z-index:999999999 !important;display:flex !important;align-items:center !important;
-      justify-content:center !important;color:rgba(88,166,255,0.7) !important;font-size:13px !important;
-      user-select:none !important;backdrop-filter:blur(8px) !important;transition:all .15s !important;}
-    #dg-kick-tab:hover{background:rgba(28,33,40,0.85) !important;color:#79c0ff !important;}
-    #dg-kick-popup{position:fixed !important;top:50% !important;transform:translateY(-50%) !important;
+      cursor:pointer !important; z-index:999999999 !important;
+      display:flex !important; align-items:center !important; justify-content:center !important;
+      color:rgba(88,166,255,0.7) !important; font-size:13px !important; user-select:none !important;
+      backdrop-filter:blur(8px) !important; transition:all .15s !important;
+    }
+    #dg-kick-tab:hover { background:rgba(28,33,40,0.85) !important; color:#79c0ff !important; }
+
+    #dg-kick-popup {
+      position:fixed !important; top:50% !important; transform:translateY(-50%) !important;
       ${L?'left:24px !important':'right:24px !important'};
-      background:rgba(13,17,23,0.75) !important;border:1px solid rgba(48,54,61,0.4) !important;
-      border-radius:10px !important;padding:5px !important;min-width:200px !important;
-      box-shadow:0 8px 32px rgba(0,0,0,.4) !important;backdrop-filter:blur(20px) !important;
-      z-index:999999998 !important;display:none !important;flex-direction:column !important;
-      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif !important;}
-    #dg-kick-popup.show{display:flex !important;}
-    .dg-kick-row{display:flex !important;align-items:center !important;gap:8px !important;
-      padding:8px 10px !important;border-radius:6px !important;transition:background .15s !important;}
-    .dg-kick-row:hover{background:rgba(255,255,255,0.05) !important;}
-    .dg-kick-row-name{flex:1 !important;font-size:12px !important;color:rgba(201,209,217,0.9) !important;}
-    .dg-kick-sw{position:relative !important;width:36px !important;height:20px !important;flex-shrink:0 !important;}
-    .dg-kick-sw input{opacity:0 !important;width:0 !important;height:0 !important;}
-    .dg-kick-sw span{position:absolute !important;inset:0 !important;background:rgba(33,38,45,0.8) !important;
-      border:1px solid rgba(48,54,61,0.6) !important;border-radius:20px !important;cursor:pointer !important;transition:.25s !important;}
-    .dg-kick-sw span:before{content:'' !important;position:absolute !important;width:12px !important;height:12px !important;
-      left:3px !important;top:3px !important;background:#6e7681 !important;border-radius:50% !important;transition:.25s !important;}
-    .dg-kick-sw input:checked+span{background:#238636 !important;border-color:#2ea043 !important;}
-    .dg-kick-sw input:checked+span:before{transform:translateX(16px) !important;background:#fff !important;}
-  `);
+      background:rgba(13,17,23,0.75) !important; border:1px solid rgba(48,54,61,0.4) !important;
+      border-radius:10px !important; padding:5px !important; min-width:200px !important;
+      box-shadow:0 8px 32px rgba(0,0,0,.4) !important;
+      backdrop-filter:blur(20px) !important; -webkit-backdrop-filter:blur(20px) !important;
+      z-index:999999998 !important; display:none !important; flex-direction:column !important;
+      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif !important;
+    }
+    #dg-kick-popup.show { display:flex !important; }
+
+    .dg-kick-row {
+      display:flex !important; align-items:center !important; gap:8px !important;
+      padding:8px 10px !important; border-radius:6px !important; cursor:default !important;
+      transition:background .15s !important;
+    }
+    .dg-kick-row:hover { background:rgba(255,255,255,0.05) !important; }
+    .dg-kick-row.click { cursor:pointer !important; }
+    .dg-kick-row-name { flex:1 !important; font-size:12px !important; color:rgba(201,209,217,0.9) !important; }
+
+    .dg-kick-sw { position:relative !important; width:36px !important; height:20px !important; flex-shrink:0 !important; }
+    .dg-kick-sw input { opacity:0 !important; width:0 !important; height:0 !important; }
+    .dg-kick-sw span {
+      position:absolute !important; inset:0 !important;
+      background:rgba(33,38,45,0.8) !important; border:1px solid rgba(48,54,61,0.6) !important;
+      border-radius:20px !important; cursor:pointer !important; transition:.25s !important;
+    }
+    .dg-kick-sw span:before {
+      content:'' !important; position:absolute !important;
+      width:12px !important; height:12px !important; left:3px !important; top:3px !important;
+      background:#6e7681 !important; border-radius:50% !important; transition:.25s !important;
+    }
+    .dg-kick-sw input:checked+span { background:#238636 !important; border-color:#2ea043 !important; }
+    .dg-kick-sw input:checked+span:before { transform:translateX(16px) !important; background:#fff !important; }
+  `;
+
+  function addCSS() {
+    if (document.getElementById('dg-kick-style')) return;
+    const host = document.head || document.documentElement;
+    if (!host) return;
+    const st = document.createElement('style');
+    st.id = 'dg-kick-style';
+    st.textContent = CSS;
+    host.appendChild(st);
+  }
+
+  addCSS();
 
   const plugins = window.DEVg0d_PLUGINS || [];
 
   function buildUI() {
+    if (document.getElementById('dg-kick-tab')) return;
+    addCSS();
+
     const tab = document.createElement('div');
     tab.id = 'dg-kick-tab';
     tab.textContent = L ? '›' : '‹';
@@ -73,7 +116,25 @@
        </div>`
     ).join('');
 
-    document.body.append(tab, popup);
+    (document.documentElement || document.body).append(tab, popup);
+
+    document.addEventListener('fullscreenchange', () => {
+      const fsEl = document.fullscreenElement;
+      if (!fsEl) {
+        if (tab.parentElement !== document.documentElement) document.documentElement.append(tab, popup);
+      } else if (!fsEl.contains(tab)) {
+        fsEl.append(tab, popup);
+      }
+    });
+
+    const ensureCSS = () => {
+      const dead = document.getElementById('dg-kick-style');
+      if (dead && getComputedStyle(tab).position === 'fixed') return;
+      if (dead) dead.remove();
+      addCSS();
+    };
+    ensureCSS();
+    [300, 1000, 2500, 5000].forEach(ms => setTimeout(ensureCSS, ms));
 
     tab.onclick = (e) => { e.stopPropagation(); popup.classList.toggle('show'); };
     document.addEventListener('click', (e) => {
@@ -95,6 +156,8 @@
       };
     });
 
+    // เรียก init ของ plugin ที่เปิดอยู่ (Force1080p ถูก init ไปแล้วใน addon
+    // แต่ถ้ามี plugin อื่นในอนาคต จะ init ที่นี่)
     plugins.forEach(p => {
       if (p.type==='toggle' && p.init && getKey(p.key))
         try { p.init(); } catch(e) { console.error('[DEV/g0d]', e); }
@@ -112,15 +175,32 @@
         fn();
       } else if (++tries > 100) {
         clearInterval(iv);
-        console.warn('[DEV/g0d] plugins not loaded');
+        console.warn('[DEV/g0d] plugins not loaded — building UI with empty list');
         fn();
       }
     }, 100);
   }
 
-  whenReady(() => {
-    if (document.body) buildUI();
-    else document.addEventListener('DOMContentLoaded', buildUI);
-  });
+  function mount() {
+    let tries = 0;
+    const tick = () => {
+      if (document.getElementById('dg-kick-tab')) return;
+      if (!document.body) {
+        if (++tries < 240) setTimeout(tick, 50);
+        return;
+      }
+      try {
+        buildUI();
+      } catch (e) {
+        if (++tries < 240) setTimeout(tick, 100);
+      }
+    };
+    tick();
+  }
+
+  whenReady(mount);
+  setInterval(() => {
+    if (!document.getElementById('dg-kick-tab')) mount();
+  }, 2000);
 
 })();
